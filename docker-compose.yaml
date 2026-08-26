@@ -28,8 +28,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    ports:
-      - "5432:5432"
+    # Host port publishing removed for Coolify. Services reach each other by
+    # name on app-network, and Coolify's Traefik proxies from outside, so a
+    # host binding is unnecessary here AND collides: Coolify already owns
+    # 8000 on its host, which failed deployment 3ykhwv8j with
+    #   'Bind for :::8000 failed: port is already allocated'.
+    # Local development is unaffected -- docker-compose-local.yaml publishes
+    # 5432/6379/9000/9001 for that.
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -42,8 +47,6 @@ services:
 
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
     command: >
       --requirepass ${REDIS_PASSWORD:-redissecret}
     volumes:
@@ -64,9 +67,6 @@ services:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
       MINIO_API_CORS_ALLOW_ORIGIN: "*"
-    ports:
-      - "127.0.0.1:9000:9000" # Bind to localhost explicitly
-      - "127.0.0.1:9001:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -269,8 +269,6 @@ services:
       POSTHOG_API_KEY: "phc_ItizB1dP6yv7ZYobbcqrpxTdbomDA8hJFSEmAMdYvIr"
       POSTHOG_HOST: "https://us.i.posthog.com"
 
-    ports:
-      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -311,8 +309,6 @@ services:
       # Posthog
       POSTHOG_KEY: "phc_ItizB1dP6yv7ZYobbcqrpxTdbomDA8hJFSEmAMdYvIr"
       POSTHOG_HOST: "https://us.posthog.com"
-    ports:
-      - "3010:3010"
     depends_on:
       api:
         condition: service_healthy
