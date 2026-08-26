@@ -141,7 +141,15 @@ services:
       - app-network
 
   api:
-    image: ${REGISTRY:-dograhai}/dograh-api:latest
+    # BUILD FROM THIS REPO, do not pull dograhai/dograh-api.
+    # Upstream compose only referenced the published image, so deploying it
+    # unchanged would silently run stock Dograh and none of Vaani's pipeline.
+    # Context is the repo root because api/Dockerfile bind-mounts ./pipecat
+    # (a git submodule -- the clone MUST be recursive or this build fails).
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: ${REGISTRY:-vaani}/dograh-api:latest
     environment:
       # Core application config
       ENVIRONMENT: "${ENVIRONMENT:-local}"
@@ -284,7 +292,11 @@ services:
       - app-network
 
   ui:
-    image: ${REGISTRY:-dograhai}/dograh-ui:latest
+    # Build from this repo -- carries the Vaani agent editor at /agent/[id].
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    image: ${REGISTRY:-vaani}/dograh-ui:latest
     environment:
       # Bind the Next.js standalone server to all interfaces
       HOSTNAME: "0.0.0.0"
