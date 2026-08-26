@@ -986,7 +986,11 @@ def create_llm_service_from_provider(
     elif provider == ServiceProviders.GROQ.value:
         return GroqLLMService(
             api_key=api_key,
-            settings=GroqLLMSettings(model=model, temperature=0.1),
+            settings=GroqLLMSettings(
+                model=model,
+                temperature=0.1,
+                extra=_groq_llm_extra(model),
+            ),
         )
     elif provider == ServiceProviders.OPENROUTER.value:
         kwargs = {}
@@ -1282,6 +1286,22 @@ def create_realtime_llm_service(user_config, audio_config: "AudioConfig"):
         raise HTTPException(
             status_code=400, detail=f"Invalid realtime LLM provider {provider}"
         )
+
+
+# Groq reasoning models spend their first tokens thinking, which the caller
+# hears as silence. Measured on openai/gpt-oss-120b with a ~2,888-token prompt:
+# reasoning_effort=low gave TTFT p50 631 ms with speech on 5/5 requests, versus
+# 1699 ms and speech on only 2/5 with the parameter absent.
+# Non-reasoning models reject the parameter, so it is opt-in by model name.
+_GROQ_REASONING_MODEL_MARKERS = ("gpt-oss", "qwen3", "deepseek-r1")
+
+
+def _groq_llm_extra(model: str) -> dict:
+    """Extra request params for a Groq model; empty for non-reasoning models."""
+    name = (model or "").lower()
+    if any(marker in name for marker in _GROQ_REASONING_MODEL_MARKERS):
+        return {"reasoning_effort": "low"}
+    return {}
 
 
 def create_llm_service(

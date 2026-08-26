@@ -21,11 +21,24 @@ DEFAULT_MAX_CALL_DURATION_SECONDS = 300
 # its slot purged as stale and the org concurrency limit under-counts.
 MAX_CALL_DURATION_SECONDS = 1200
 DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS = 10.0
-DEFAULT_SMART_TURN_STOP_SECS = 2.0
+# MEASURED 2026-08-26: user_turn_secs was 0.803/0.802/0.806/0.815/0.816/0.816 s
+# — dead constant, because it is VAD stop (0.2 s) + this value. It was 70% of
+# total turn latency while LLM was 0.19 s and TTS 0.11 s. The semantic analyzer
+# can end a turn earlier than this; the value is only its silence ceiling.
+# Paired constraint (latency_budget.yaml): false-interruption rate must stay
+# <= 2%. Telugu callers protested at 350 ms of TOTAL silence, and VAD's 0.2 s
+# adds to this, so 0.2 here means 0.4 s total — above that complaint line.
+DEFAULT_SMART_TURN_STOP_SECS = 0.2
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
-DEFAULT_TURN_STOP_STRATEGY = "transcription"
+DEFAULT_TURN_STOP_STRATEGY = "turn_analyzer"  # semantic, in-process, no network hop
+# False = the semantic turn detector ends the turn; the transcript is
+# bookkeeping and leaves the latency critical path (~438 ms/turn).
+DEFAULT_TURN_WAIT_FOR_TRANSCRIPT = False
+# Start the LLM on the caller's stable partial prefix. Only an exact
+# text match is replayed; a miss falls through to the normal path.
+DEFAULT_SPECULATION_ENABLED = True
 DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 
 
@@ -95,6 +108,8 @@ class WorkflowConfigurationDefaults(BaseModel):
     turn_stop_strategy: Literal["transcription", "turn_analyzer"] = (
         DEFAULT_TURN_STOP_STRATEGY
     )
+    turn_wait_for_transcript: bool = DEFAULT_TURN_WAIT_FOR_TRANSCRIPT
+    speculation_enabled: bool = DEFAULT_SPECULATION_ENABLED
     dictionary: str = ""
     context_compaction_enabled: bool = DEFAULT_CONTEXT_COMPACTION_ENABLED
     text_chat_inactivity_timeout_seconds: int = Field(

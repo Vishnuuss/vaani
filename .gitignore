@@ -27,3 +27,7 @@ node_modules/
 .superpowers/
 docs/superpowers/
 .gstack/
+
+# Vaani scratch output — a compiled prompt dump, not source
+.vaani_compiled_prompt.md
+dograh_pcm_cache/

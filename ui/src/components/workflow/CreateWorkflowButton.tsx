@@ -1,6 +1,6 @@
 'use client';
 
-import { Bot, ChevronDown, LayoutTemplate, PlusIcon } from 'lucide-react';
+import { Bot, ChevronDown, FileText, LayoutTemplate, PlusIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { toast } from 'sonner';
@@ -44,6 +44,31 @@ const BLANK_WORKFLOW_DEFINITION = {
     viewport: { x: 808, y: 269, zoom: 0.75 },
 };
 
+/** One prompt, no connections — the shape the /agent editor owns. */
+const SINGLE_PROMPT_DEFINITION = {
+    nodes: [
+        {
+            id: 'agent',
+            type: 'startCall',
+            position: { x: 0, y: 0 },
+            data: {
+                name: 'Agent',
+                prompt: '',
+                greeting: '',
+                greeting_type: 'text',
+                allow_interrupt: true,
+                add_global_prompt: false,
+                is_start: true,
+                extraction_enabled: false,
+                extraction_prompt: '',
+                extraction_variables: [],
+            },
+        },
+    ],
+    edges: [],
+    viewport: { x: 0, y: 0, zoom: 1 },
+};
+
 export function CreateWorkflowButton() {
     const router = useRouter();
     const { user, getAccessToken } = useAuth();
@@ -51,6 +76,34 @@ export function CreateWorkflowButton() {
 
     const handleAgentBuilder = () => {
         router.push('/workflow/create');
+    };
+
+    const handleSinglePrompt = async () => {
+        if (isCreating || !user) return;
+        setIsCreating(true);
+
+        try {
+            const accessToken = await getAccessToken();
+            const response = await createWorkflowApiV1WorkflowCreateDefinitionPost({
+                body: {
+                    name: `Agent-${getRandomId()}`,
+                    workflow_definition: SINGLE_PROMPT_DEFINITION as unknown as {
+                        [key: string]: unknown;
+                    },
+                },
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+
+            // Straight to the prompt editor. The canvas is never opened.
+            if (response.data?.id) {
+                router.push(`/agent/${response.data.id}`);
+            }
+        } catch (err) {
+            logger.error(`Error creating agent: ${err}`);
+            toast.error('Failed to create agent');
+        } finally {
+            setIsCreating(false);
+        }
     };
 
     const handleBlankCanvas = async () => {
@@ -91,6 +144,13 @@ export function CreateWorkflowButton() {
                 </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={handleSinglePrompt} disabled={isCreating} className="cursor-pointer">
+                    <FileText className="w-4 h-4 mr-2" />
+                    <div>
+                        <div className="font-medium">Prompt</div>
+                        <div className="text-xs text-muted-foreground">One prompt and tools. No steps, no connections.</div>
+                    </div>
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleAgentBuilder} className="cursor-pointer">
                     <Bot className="w-4 h-4 mr-2" />
                     <div>

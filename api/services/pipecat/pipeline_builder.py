@@ -3,6 +3,8 @@ import os
 from loguru import logger
 
 from api.services.pipecat.audio_config import AudioConfig
+from api.services.pipecat.speculation.probe import SpeculationProbe
+from api.services.vaani.pipeline import build_vaani_pipeline
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -37,61 +39,39 @@ def build_pipeline(
     pipeline_metrics_aggregator,
     voicemail_detector=None,
     recording_router=None,
+    speculation_probe=None,
+    speculative_gate=None,
+    state_injector=None,
+    reply_filter=None,
 ):
-    """Build the main pipeline with all components.
+    """Build the main pipeline.
 
-    Args:
-        audio_buffer: AudioBufferProcessor that handles both input and output audio recording.
-        voicemail_detector: Optional native pipecat VoicemailDetector. When provided,
-            inserts voicemail detection after STT. Note: We don't use the TTS gate
-            to avoid blocking TTS frames during classification.
-        recording_router: Optional RecordingRouterProcessor. When provided,
-            inserts between callback processor and TTS to route between
-            pre-recorded audio playback and dynamic TTS.
+    The processor ORDER is not defined here -- it belongs to Vaani, in
+    ``api/services/vaani/pipeline.py``. Dograh owns the transport, campaigns,
+    Redis, Postgres, telephony and the dashboard; Vaani owns the conversation
+    and the shape of the pipeline that carries it. This function stays as the
+    call site Dograh already knows about, and forwards.
     """
-    # Build processors list with optional voicemail detection
-    processors = [
-        transport.input(),  # Transport user input
+    if speculation_probe is None:
+        speculation_probe = SpeculationProbe()
+
+    return build_vaani_pipeline(
+        transport,
         stt,
-    ]
-
-    # Insert voicemail detector after STT if enabled
-    # Note: We intentionally do NOT use voicemail_detector.gate() to allow TTS
-    # frames to continue flowing during classification (non-blocking detection)
-
-    # Note: We must keep user_context_aggregator after voicemail_detector
-    # or else, LLMContextFrames generated from user_context_aggregator will
-    # start generating LLM Completion from Voicemail Classifier
-    if voicemail_detector:
-        logger.info("Adding native voicemail detector to pipeline")
-        processors.append(voicemail_detector.detector())
-
-    # Continue with the rest of the pipeline
-    post_llm = [pipeline_engine_callback_processor]
-    if recording_router:
-        post_llm.append(recording_router)
-
-    processors.append(user_context_aggregator)
-
-    # Insert LLM gate before the main LLM when voicemail detection is enabled.
-    # This prevents the main LLM from being triggered until classification
-    # determines whether a human or voicemail answered the call.
-    if voicemail_detector:
-        processors.append(voicemail_detector.llm_gate())
-
-    processors.extend(
-        [
-            llm,  # LLM
-            *post_llm,
-            tts,  # TTS
-            transport.output(),  # Transport bot output
-            audio_buffer,  # AudioBufferProcessor - records both input and output audio
-            assistant_context_aggregator,  # Assistant spoken responses
-            pipeline_metrics_aggregator,
-        ]
+        audio_buffer,
+        llm,
+        tts,
+        user_context_aggregator,
+        assistant_context_aggregator,
+        pipeline_engine_callback_processor,
+        pipeline_metrics_aggregator,
+        voicemail_detector=voicemail_detector,
+        recording_router=recording_router,
+        speculation_probe=speculation_probe,
+        speculative_gate=speculative_gate,
+        state_injector=state_injector,
+        reply_filter=reply_filter,
     )
-
-    return Pipeline(processors)
 
 
 def build_realtime_pipeline(

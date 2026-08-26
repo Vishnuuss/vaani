@@ -17,6 +17,7 @@ from pipecat.turns.user_stop import (
 )
 
 import api.services.pipecat.run_pipeline as run_pipeline_module
+from api.services.vaani import turn_taking as vaani_turn_taking
 from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.run_pipeline import (
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
@@ -235,9 +236,26 @@ def test_non_realtime_uses_external_stop_for_external_turn_stt():
     assert isinstance(strategies[0], ExternalUserTurnStopStrategy)
 
 
-def test_non_realtime_default_uses_speech_timeout_stop():
+def test_non_realtime_default_uses_the_turn_analyzer():
+    """FORK CHANGE, deliberate. Upstream defaults to the speech timeout.
+
+    This fork sets DEFAULT_TURN_STOP_STRATEGY = "turn_analyzer": a trained
+    semantic detector instead of a fixed 0.6s clock. Until the default was
+    actually plumbed through, empty configs silently landed on the speech
+    timeout and every turn paid a dead-constant 0.80s endpoint.
+    """
     strategies = _create_non_realtime_user_turn_stop_strategies(
         {},
+        uses_external_turns=False,
+    )
+
+    assert len(strategies) == 1
+    assert isinstance(strategies[0], TurnAnalyzerUserTurnStopStrategy)
+
+
+def test_non_realtime_can_opt_back_to_speech_timeout():
+    strategies = _create_non_realtime_user_turn_stop_strategies(
+        {"turn_stop_strategy": "transcription"},
         uses_external_turns=False,
     )
 
@@ -246,8 +264,10 @@ def test_non_realtime_default_uses_speech_timeout_stop():
 
 
 def test_non_realtime_can_use_turn_analyzer_stop_strategy(monkeypatch):
+    # Turn-taking moved to api/services/vaani/turn_taking.py, so the analyzer
+    # is constructed there now. run_pipeline still exposes the same functions.
     monkeypatch.setattr(
-        run_pipeline_module,
+        vaani_turn_taking,
         "LocalSmartTurnAnalyzerV3",
         lambda *, params: params,
     )

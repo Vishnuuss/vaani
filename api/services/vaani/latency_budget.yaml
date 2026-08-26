@@ -1,0 +1,111 @@
+# =============================================================================
+# PROJECT VAANI — LATENCY BUDGET
+#
+# THIS FILE IS THE SINGLE SOURCE OF TRUTH FOR THE 800 ms TARGET.
+#
+# It is not documentation. It is loaded at runtime by vaani/latency.py, enforced
+# on every turn, and validated in CI. Changing a number here changes what the
+# code allows and what the build accepts.
+#
+# RULE: the sum of all component budgets MUST NOT exceed `target_ms`.
+#       CI fails if it does. You cannot give one component more time without
+#       taking it from another.
+# =============================================================================
+
+version: 1
+
+target:
+  # Server-side turn latency: endpoint decision -> first audio byte out.
+  # This is the number. Everything else serves it.
+  p50_ms: 800
+  p95_ms: 1200
+
+  # What the caller actually hears. Carrier transit, jitter buffer, codec.
+  # NOT engineerable — measured, never optimised. Recorded so nobody confuses
+  # the two numbers again.
+  telephony_overhead_ms: 490
+  caller_p50_ms: 1290
+
+# -----------------------------------------------------------------------------
+# COMPONENT BUDGETS
+#
+# `budget_ms`  - hard allocation. Exceeding it is a violation.
+# `measured`   - true if this number came from measuring OUR system.
+#                false means it is an ESTIMATE and must be replaced by
+#                measurement before it can be trusted. Be honest here.
+# `source`     - where the number came from.
+# -----------------------------------------------------------------------------
+
+components:
+
+  endpoint_detection:
+    budget_ms: 250
+    measured: false
+    source: "ESTIMATE. No Telugu turn detector exists yet. Inferred from LiveKit
+             detector behaviour in supported languages. LARGEST RISK IN THE BUDGET:
+             550ms of the 1200ms saving depends on this."
+    owner: "M2 Endpointer"
+    notes: "Silence-threshold fallback cannot go below 600ms for Telugu safely."
+
+  stt_finalize:
+    budget_ms: 100
+    measured: false
+    source: "ESTIMATE. No public benchmark measures Telugu STT latency."
+    owner: "M2 SttPort"
+
+  llm_first_spoken_token:
+    budget_ms: 200
+    measured: false
+    source: "ESTIMATE from Groq TTFT ~120ms + first-sentence generation at
+             ~750 tok/s. Current system's 600ms is itself DERIVED, not measured."
+    owner: "M3 BrainService"
+    notes: "Requires a NON-REASONING model. A reasoning model cannot fit this."
+
+  tts_first_audio:
+    budget_ms: 190
+    measured: true
+    source: "MEASURED (Coval independent benchmark, English): Cartesia Sonic-3
+             188ms P50. Fastest available is 155ms (Gradium, no Telugu).
+             This is the only component with hard external measurement."
+    owner: "M2 TtsPort"
+    notes: "No saving available here. Cartesia IQR is 100ms - watch the p95."
+
+  transport:
+    budget_ms: 50
+    measured: false
+    source: "ESTIMATE. Provider serving regions not yet verified."
+    owner: "M2 / infrastructure"
+    notes: "Traceroute the providers. This is an hour of work to make measured."
+
+# -----------------------------------------------------------------------------
+# PERCEIVED LATENCY
+# What the caller feels, which is not what the clock says.
+# -----------------------------------------------------------------------------
+
+perceived:
+  backchannel_ms: 200      # acknowledgement token must start by here
+  target_ms: 400           # perceived latency ceiling
+  filler_threshold_ms: 1200 # emit filler speech past this
+
+# -----------------------------------------------------------------------------
+# THE PAIRED CONSTRAINT
+#
+# Faster endpointing buys interruptions. A latency win purchased with
+# interruptions is NOT A WIN. Callers on the incumbent already protested being
+# cut off in Telugu at 350ms. Every latency gate is paired with this one.
+# -----------------------------------------------------------------------------
+
+quality_floor:
+  max_false_interruption_rate: 0.02   # must be <= incumbent at 800ms endpointing
+  min_endpoint_silence_ms_telugu: 600 # hard floor when NOT using a turn detector
+  min_turn_words: 1                   # one-word Telugu turns MUST register
+
+# -----------------------------------------------------------------------------
+# ENFORCEMENT
+# -----------------------------------------------------------------------------
+
+enforcement:
+  dev: strict     # raise BudgetExceeded immediately
+  ci: strict      # fail the build
+  staging: warn   # log a violation event
+  prod: warn      # never break a live call over a budget breach

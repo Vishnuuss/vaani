@@ -10,8 +10,11 @@ from api.errors.failure import mark_failure_reported
 from api.schemas.workflow_configurations import (
     DEFAULT_MAX_CALL_DURATION_SECONDS,
     DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS,
+    # Re-exported: test_run_pipeline_realtime_turn_config imports these two
+    # from THIS module, not from the schema. Turn-taking itself moved to
+    # api/services/vaani/turn_taking.py; these names stay for that contract.
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
-    DEFAULT_SMART_TURN_STOP_SECS,
+    DEFAULT_SPECULATION_ENABLED,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_TURN_START_STRATEGY,
 )
@@ -43,6 +46,15 @@ from api.services.pipecat.pipeline_engine_callbacks_processor import (
     PipelineEngineCallbacksProcessor,
 )
 from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggregator
+from api.services.pipecat.speculation.coordinator import SpeculationCoordinator
+from api.services.pipecat.speculation.gate import SpeculativeLLMGate
+from api.services.pipecat.speculation.probe import SpeculationProbe
+from api.services.vaani import latency as vaani_latency
+from api.services.vaani import turn_taking as vaani_turn_taking
+from api.services.vaani import ReplyFilter, StateInjector
+from api.services.vaani import Brief as VaaniBrief
+from api.services.vaani import compile_prompt as compile_vaani_prompt
+from api.services.pipecat.speculation.llm_generator import make_llm_generator
 from api.services.pipecat.pre_call_fetch import execute_pre_call_fetch
 from api.services.pipecat.realtime_feedback_events import (
     build_node_transition_event,
@@ -75,9 +87,10 @@ from api.services.telephony import registry as telephony_registry
 from api.services.workflow.dto import ReactFlowDTO
 from api.services.workflow.initial_context import merge_external_initial_context
 from api.services.workflow.pipecat_engine import PipecatEngine
+from api.services.workflow.pipecat_engine_context_composer import (
+    compose_system_prompt_for_node,
+)
 from api.services.workflow.workflow_graph import WorkflowGraph
-from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.extensions.voicemail.voicemail_detector import VoicemailDetector
@@ -94,11 +107,6 @@ from pipecat.turns.user_mute import (
 )
 from pipecat.turns.user_start import (
     ExternalUserTurnStartStrategy,
-    MinWordsUserTurnStartStrategy,
-    ProvisionalVADUserTurnStartStrategy,
-)
-from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
-    TranscriptionUserTurnStartStrategy,
 )
 from pipecat.turns.user_start.vad_user_turn_start_strategy import (
     VADUserTurnStartStrategy,
@@ -106,8 +114,8 @@ from pipecat.turns.user_start.vad_user_turn_start_strategy import (
 from pipecat.turns.user_stop import (
     ExternalUserTurnStopStrategy,
     SpeechTimeoutUserTurnStopStrategy,
-    TurnAnalyzerUserTurnStopStrategy,
 )
+from pipecat.services.settings import LLMSettings
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.enums import EndTaskReason, RealtimeFeedbackType
 from pipecat.utils.run_context import set_current_org_id, set_current_run_id
@@ -117,6 +125,117 @@ ensure_tracing()
 
 DEFAULT_USER_TURN_STOP_TIMEOUT = 5.0
 EXTERNAL_TURN_USER_STOP_TIMEOUT = 30.0
+
+
+def compile_vaani_system_prompt(workflow_graph, *, workflow_name: str) -> str:
+    """Compile the 4-layer Vaani prompt for a Dograh single-prompt agent.
+
+    What the user types in the /agent editor is **Layer 3 — the business**.
+    Vaani supplies the rest and the user never has to write them:
+
+        Layer 1  persona & voice     layers/01_persona/<language>.md
+        Layer 2  sales psychology    layers/02_psychology/core.md   <- the moat
+        Layer 3  business            THE UI TEXT
+        Layer 4  mission             layers/04_mission/<agent_type>.md
+
+    Layers 1, 2 and 4 are byte-identical across every agent and sit at the FRONT,
+    so they land in the provider's cached prefix instead of being re-billed and
+    re-processed on every turn.
+
+    The extraction variables double as the qualification questions, so the
+    "you must find out" section is generated rather than typed twice.
+    """
+    start_node = workflow_graph.nodes[workflow_graph.start_node_id]
+
+    questions = []
+    for variable in getattr(start_node, "extraction_variables", None) or []:
+        name = (
+            variable.get("name") if isinstance(variable, dict)
+            else getattr(variable, "name", "")
+        )
+        if not name:
+            continue
+        ask = (
+            variable.get("prompt") if isinstance(variable, dict)
+            else getattr(variable, "prompt", "")
+        )
+        questions.append({"field": name, "ask": ask or name})
+
+    brief = VaaniBrief(
+        business=workflow_name or "",
+        questions=questions,
+        # The editor's text is the business layer, verbatim.
+        products=getattr(start_node, "prompt", "") or "",
+    )
+    return compile_vaani_prompt(brief)
+
+
+def build_vaani_brain(workflow_graph, context, system_prompt: str, *, workflow_name: str):
+    """Build Vaani's (StateInjector, ReplyFilter) from a Dograh workflow.
+
+    A Dograh single-prompt agent already carries what a Vaani `Brief` needs: the
+    prompt, and the extraction variables — which ARE the qualification
+    questions. Each variable's `name` becomes the state field and its `prompt`
+    becomes the question text, so the state block names real fields instead of
+    words derived from a sentence.
+
+    The pair is returned together because ReplyFilter reads the injector's live
+    state to enforce the hard rules.
+    """
+    start_node = workflow_graph.nodes[workflow_graph.start_node_id]
+    raw_variables = getattr(start_node, "extraction_variables", None) or []
+
+    questions = []
+    for variable in raw_variables:
+        name = (
+            variable.get("name") if isinstance(variable, dict) else getattr(variable, "name", "")
+        )
+        if not name:
+            continue
+        ask = (
+            variable.get("prompt") if isinstance(variable, dict) else getattr(variable, "prompt", "")
+        )
+        questions.append({"field": name, "ask": ask or name})
+
+    brief = VaaniBrief(business=workflow_name or "", questions=questions)
+    injector = StateInjector(brief, context, system_prompt)
+    return injector, ReplyFilter(injector)
+
+
+def build_speculation_processors(workflow_graph, llm, context, has_recordings: bool):
+    """Build the (probe, gate) pair that overlaps the turn boundary.
+
+    Extracted from run_pipeline so it can be unit tested. It was inlined once,
+    passed the WorkflowModel instead of the WorkflowGraph, and disabled
+    speculation silently on every single call — the try/except around the
+    call site turned a type error into a one-line warning nobody read.
+
+    Returns:
+        (probe, gate) sharing one coordinator. The probe belongs after STT (the
+        only place interim transcripts exist); the gate belongs immediately
+        before the LLM (the only place the generation trigger exists).
+    """
+    start_node = workflow_graph.nodes[workflow_graph.start_node_id]
+    system_prompt = compose_system_prompt_for_node(
+        node=start_node,
+        workflow=workflow_graph,
+        format_prompt=lambda text: text,
+        has_recordings=has_recordings,
+    )
+    generate = make_llm_generator(
+        llm,
+        system_prompt=system_prompt,
+        get_history=lambda: [
+            m
+            for m in context.messages
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        ],
+        get_state_block=lambda: "",
+    )
+    coordinator = SpeculationCoordinator(generate=generate)
+    return SpeculationProbe(coordinator=coordinator), SpeculativeLLMGate(
+        coordinator=coordinator
+    )
 
 
 def _resolve_user_turn_stop_timeout(
@@ -129,78 +248,19 @@ def _resolve_user_turn_stop_timeout(
     return DEFAULT_USER_TURN_STOP_TIMEOUT
 
 
-def _resolve_turn_start_min_words(run_configs: dict) -> int:
-    return max(
-        1,
-        int(run_configs.get("turn_start_min_words", DEFAULT_TURN_START_MIN_WORDS)),
-    )
-
-
-def _resolve_provisional_vad_pause_secs(run_configs: dict) -> float:
-    return max(
-        0.1,
-        float(
-            run_configs.get(
-                "provisional_vad_pause_secs", DEFAULT_PROVISIONAL_VAD_PAUSE_SECS
-            )
-        ),
-    )
-
-
-def _create_non_realtime_user_turn_start_strategies(
-    run_configs: dict, *, uses_external_turns: bool
-):
-    """Return user turn start strategies for non-realtime pipelines."""
-
-    turn_start_strategy = run_configs.get(
-        "turn_start_strategy", DEFAULT_TURN_START_STRATEGY
-    )
-
-    if turn_start_strategy == "min_words":
-        return [
-            MinWordsUserTurnStartStrategy(
-                min_words=_resolve_turn_start_min_words(run_configs)
-            )
-        ]
-
-    if turn_start_strategy == "provisional_vad":
-        return [
-            ProvisionalVADUserTurnStartStrategy(
-                pause_secs=_resolve_provisional_vad_pause_secs(run_configs)
-            ),
-        ]
-
-    if uses_external_turns:
-        # The STT emits its own turn boundaries and owns interruptions. Local
-        # VAD is deliberately kept out of the default start strategies: it would
-        # win the race on raw voice activity and start the turn before the STT
-        # confirms a real turn.
-        return [ExternalUserTurnStartStrategy(enable_interruptions=True)]
-
-    return [TranscriptionUserTurnStartStrategy(), VADUserTurnStartStrategy()]
-
-
-def _create_non_realtime_user_turn_stop_strategies(
-    run_configs: dict, *, uses_external_turns: bool
-):
-    """Return user turn stop strategies for non-realtime pipelines."""
-
-    if uses_external_turns:
-        return [ExternalUserTurnStopStrategy()]
-
-    if run_configs.get("turn_stop_strategy") == "turn_analyzer":
-        smart_turn_params = SmartTurnParams(
-            stop_secs=run_configs.get(
-                "smart_turn_stop_secs", DEFAULT_SMART_TURN_STOP_SECS
-            )
-        )
-        return [
-            TurnAnalyzerUserTurnStopStrategy(
-                turn_analyzer=LocalSmartTurnAnalyzerV3(params=smart_turn_params)
-            )
-        ]
-
-    return [SpeechTimeoutUserTurnStopStrategy()]
+# Turn-taking belongs to Vaani (api/services/vaani/turn_taking.py). It is the
+# largest term in the latency budget and a conversation decision, not plumbing.
+# These names are kept so the rest of this module and its tests are unchanged.
+_resolve_turn_start_min_words = vaani_turn_taking.resolve_turn_start_min_words
+_resolve_provisional_vad_pause_secs = (
+    vaani_turn_taking.resolve_provisional_vad_pause_secs
+)
+_create_non_realtime_user_turn_start_strategies = (
+    vaani_turn_taking.create_user_turn_start_strategies
+)
+_create_non_realtime_user_turn_stop_strategies = (
+    vaani_turn_taking.create_user_turn_stop_strategies
+)
 
 
 def _create_realtime_user_turn_config(provider: str):
@@ -1038,6 +1098,58 @@ async def _run_pipeline_impl(
             )
         )
 
+    # Speculative generation: start the LLM on the caller's stable partial
+    # prefix so its time-to-first-byte (measured p50 1.35 s on this provider)
+    # is already spent by the time the turn ends. Safe by construction — it
+    # only replays on an EXACT text match, and any failure falls through to
+    # the normal path.
+    # Vaani's brain on the live path. Dograh keeps campaigns, Redis, Postgres,
+    # telephony and the dashboard; the CONVERSATION is Vaani's — triage plus a
+    # live state block before the LLM, guardrails after it. Failure here must
+    # not take the call down, so it degrades to Dograh's plain behaviour.
+    state_injector = None
+    reply_filter = None
+    if not is_realtime:
+        try:
+            # The 4-layer Vaani prompt, NOT Dograh's raw node text. What the
+            # user typed in the editor is Layer 3; persona, psychology and
+            # mission are supplied from vaani/layers and never typed by hand.
+            _vaani_prompt = compile_vaani_system_prompt(
+                workflow_graph,
+                workflow_name=getattr(workflow, "name", "") or "",
+            )
+            state_injector, reply_filter = build_vaani_brain(
+                workflow_graph,
+                context,
+                _vaani_prompt,
+                workflow_name=getattr(workflow, "name", "") or "",
+            )
+            logger.info(
+                f"Vaani brain enabled: {len(_vaani_prompt):,}-char compiled prompt, "
+                f"{len(state_injector.state.required_fields)} qualification field(s)"
+            )
+        except Exception as e:
+            logger.error(f"Vaani brain DISABLED (setup failed): {e!r}")
+            state_injector = None
+            reply_filter = None
+
+    speculative_gate = None
+    speculation_probe = None
+    if not is_realtime and run_configs.get(
+        "speculation_enabled", DEFAULT_SPECULATION_ENABLED
+    ):
+        try:
+            speculation_probe, speculative_gate = build_speculation_processors(
+                workflow_graph, llm, context, has_recordings
+            )
+            logger.info("Speculative generation enabled")
+        except Exception as e:
+            # Loud on purpose: a silent disable here already cost a full
+            # debugging cycle. Calls still work, just without speculation.
+            logger.error(f"Speculation DISABLED (setup failed): {e!r}")
+            speculative_gate = None
+            speculation_probe = None
+
     # Build the pipeline
     if is_realtime:
         pipeline = build_realtime_pipeline(
@@ -1063,6 +1175,10 @@ async def _run_pipeline_impl(
             pipeline_metrics_aggregator,
             voicemail_detector=voicemail_detector,
             recording_router=recording_router,
+            speculative_gate=speculative_gate,
+            speculation_probe=speculation_probe,
+            state_injector=state_injector,
+            reply_filter=reply_filter,
         )
 
     # Create pipeline task with audio configuration
@@ -1097,8 +1213,48 @@ async def _run_pipeline_impl(
     # System Prompt and Tools
     await engine.initialize()
 
+    # engine.initialize() installs Dograh's node prompt as the system
+    # instruction. Replace it with Vaani's compiled 4-layer prompt, which is
+    # what actually makes the agent sell. Done here, after initialize(), so the
+    # override is explicit and easy to remove rather than hidden in the engine.
+    if state_injector is not None:
+        try:
+            await llm._update_settings(
+                LLMSettings(system_instruction=state_injector._system_prompt)
+            )
+            logger.info("Vaani compiled prompt installed as the system instruction")
+        except Exception as e:
+            logger.error(f"Vaani prompt NOT installed, using Dograh's: {e!r}")
+
     # Register latency observer to log user-to-bot response latency
     if task.user_bot_latency_observer:
+
+        @task.user_bot_latency_observer.event_handler("on_latency_breakdown")
+        async def on_latency_breakdown(observer, breakdown):
+            """Log where a turn's latency actually went.
+
+            Without this a turn is one opaque number and every optimisation is a
+            guess. ``user_turn_secs`` is the endpoint cost (VAD silence + STT
+            finalisation + turn-analyzer wait); the ttfb entries separate LLM
+            from TTS. This decomposition is what the <700 ms work is steered by.
+            """
+            try:
+                logger.info(
+                    "[latency] " + " | ".join(breakdown.chronological_events())
+                )
+                if breakdown.user_turn_secs is not None:
+                    logger.info(
+                        "[latency] endpoint (user_turn_secs) = "
+                        f"{breakdown.user_turn_secs:.3f}s"
+                    )
+            except Exception as e:  # pragma: no cover - diagnostics only
+                logger.debug(f"[latency] breakdown logging failed: {e}")
+
+            # Vaani checks the turn against latency_budget.yaml. That file
+            # calls itself "enforced on every turn"; this is where that becomes
+            # true. Warn-only in prod by design -- a budget breach must never
+            # break a live call.
+            vaani_latency.report(breakdown)
 
         @task.user_bot_latency_observer.event_handler("on_latency_measured")
         async def on_latency_measured(observer, latency_seconds):
