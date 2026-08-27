@@ -17,6 +17,9 @@ from api.services.configuration.options import (
     DEEPGRAM_FLUX_MODELS,
     DEEPGRAM_FLUX_MULTILINGUAL_LANGUAGE_OPTIONS,
 )
+from api.schemas.workflow_configurations import (
+    DEFAULT_STT_FINALISATION_BUDGET_SECS,
+)
 from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.gemini_json_schema_adapter import (
     DograhGeminiJSONSchemaAdapter,
@@ -254,12 +257,17 @@ def create_stt_service(
     audio_config: "AudioConfig",
     keyterms: list[str] | None = None,
     correlation_id: str | None = None,
+    stt_finalisation_budget_secs: float = DEFAULT_STT_FINALISATION_BUDGET_SECS,
 ):
     """Create and return appropriate STT service based on user configuration
 
     Args:
         user_config: User configuration containing STT settings
         keyterms: Optional list of keyterms for speech recognition boosting (Deepgram only)
+        stt_finalisation_budget_secs: How long the turn-stop strategy may wait
+            for a FINAL transcript, in seconds from speech end. Dominated the
+            turn on run 93: pipecat's shipped Sarvam p99 of 1.17s made every
+            turn wait ~0.97s.
     """
     logger.info(
         f"Creating STT service: provider={user_config.stt.provider}, model={user_config.stt.model}"
@@ -418,6 +426,13 @@ def create_stt_service(
                 language=pipecat_language,
             ),
             sample_rate=audio_config.transport_in_sample_rate,
+            # The turn-stop strategy waits `ttfs_p99_latency - vad_stop_secs`
+            # for a final transcript, and pipecat's shipped Sarvam value is a
+            # p99 of 1.17s. That made every turn wait ~0.97s on a worst case.
+            # See DEFAULT_STT_FINALISATION_BUDGET_SECS for why a p99 is the
+            # wrong number to spend here when PartialResponder makes an early
+            # turn-end degrade gracefully.
+            ttfs_p99_latency=stt_finalisation_budget_secs,
         )
     elif user_config.stt.provider == ServiceProviders.SPEACHES.value:
         language = getattr(user_config.stt, "language", None)

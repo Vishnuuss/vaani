@@ -180,6 +180,11 @@ class ReplyFilter(FrameProcessor):
             # with no trailing newline could be swallowed whole.
             tail = self._sanitizer.finish()
             self._note_mode()
+            # The tail must pass the gate too. It did not, and run 93 ended with
+            # the caller hearing "...మంచి రోజు సార్.all is ending: q" -- the
+            # guardrail had already substituted a safe close, and then this
+            # flush pushed the model's remaining text straight past it.
+            tail = self._gate(tail) if tail else ""
             if tail:
                 self._spoken += tail
                 await self.push_frame(LLMTextFrame(tail), direction)

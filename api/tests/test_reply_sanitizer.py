@@ -207,3 +207,15 @@ def test_markdown_is_advisory_not_blocking():
     f = _filter()
     text = "సరే **అండి**, చెప్పండి."
     assert f._gate(text) == text
+
+
+def test_the_end_of_response_tail_cannot_bypass_the_gate():
+    """Run 93 ended with "...మంచి రోజు సార్.all is ending: q" spoken aloud.
+
+    The gate had already substituted a safe close, then the response-end flush
+    pushed the model's remaining text past it. Once blocked, nothing more is
+    spoken -- including the tail.
+    """
+    f = _filter()
+    f._gate("ఇది 45000 రూపాయలు")          # trips the price rule, blocks
+    assert f._gate("all is ending: q") == ""

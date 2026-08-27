@@ -16,6 +16,7 @@ from api.schemas.workflow_configurations import (
     DEFAULT_LLM_HEDGE,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SPECULATION_ENABLED,
+    DEFAULT_STT_FINALISATION_BUDGET_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_TURN_START_STRATEGY,
 )
@@ -750,6 +751,9 @@ async def _run_pipeline_impl(
             audio_config,
             keyterms=keyterms,
             correlation_id=mps_correlation_id,
+            stt_finalisation_budget_secs=float(run_configs.get(
+                "stt_finalisation_budget_secs",
+                DEFAULT_STT_FINALISATION_BUDGET_SECS)),
         )
         tts = create_tts_service(
             user_config,

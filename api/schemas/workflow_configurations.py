@@ -49,6 +49,26 @@ DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 # from 1.132 s to 0.390 s, because the slow tail is a busy-worker effect that a
 # second copy simply lands clear of. Set to 1 to disable.
 DEFAULT_LLM_HEDGE = 2
+# How long the turn-stop strategy will wait for the STT's FINAL transcript,
+# measured from true speech end.
+#
+# MEASURED 2026-08-27, run 93: `endpoint_secs` was 1.29-1.75s (median 1.42s) --
+# 75% of a 1.9s turn. It is not VAD (0.2s) and not the model. pipecat ships
+# `SARVAM_TTFS_P99 = 1.17` and the strategy waits `p99 - vad_stop_secs`, so every
+# single turn paid Sarvam's NINETY-NINTH percentile finalisation latency. For
+# comparison the same table lists Deepgram at 0.35 and Speechmatics at 0.74.
+#
+# A p99 exists so a transcript is essentially never truncated. That trade only
+# makes sense if truncation is fatal, and here it is not: `PartialResponder`
+# already promotes the newest partial when a turn ends before the final arrives.
+# The safety net was built and then the deadline was set so late it never
+# caught anything. Spending the p99 on every turn to protect a case that
+# degrades gracefully is the wrong way round.
+#
+# 0.6s sits above Sarvam's measured p50 flush-to-final (438ms, bench/FINDINGS
+# §5), so most finals still arrive in time; the rest fall back to the newest
+# partial, which for a two-word answer is usually the whole answer.
+DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.6
 
 
 class ExternalPBXFieldMapping(BaseModel):
@@ -120,6 +140,8 @@ class WorkflowConfigurationDefaults(BaseModel):
     turn_wait_for_transcript: bool = DEFAULT_TURN_WAIT_FOR_TRANSCRIPT
     speculation_enabled: bool = DEFAULT_SPECULATION_ENABLED
     llm_hedge: int = Field(default=DEFAULT_LLM_HEDGE, ge=1, le=3)
+    stt_finalisation_budget_secs: float = Field(
+        default=DEFAULT_STT_FINALISATION_BUDGET_SECS, ge=0.2, le=3.0)
     dictionary: str = ""
     context_compaction_enabled: bool = DEFAULT_CONTEXT_COMPACTION_ENABLED
     text_chat_inactivity_timeout_seconds: int = Field(
