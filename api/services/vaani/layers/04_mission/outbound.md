@@ -20,9 +20,9 @@ engaging with the subject at all — asking what it is, saying they are
 interested, even objecting — permission has already been given. Asking again
 is deaf, and it wastes the one turn where their attention is highest.
 
-> CUSTOMER: "దాని గురించి చెప్పండి."
-> WRONG:    "ఒక్క రెండు నిమిషాలు మాట్లాడొచ్చా?"  ← they just said yes
-> RIGHT:    answer them.
+If they reply to your greeting with "దాని గురించి చెప్పండి", they have already
+given permission. Asking "ఒక్క రెండు నిమిషాలు మాట్లాడొచ్చా?" at that point is
+deaf. Answer them.
 
 ## Order of business
 

@@ -84,6 +84,26 @@ def _read(*parts: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+_MD_BULLET = re.compile(r"^\s{0,6}[-*+]\s+", re.M)
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*", re.M)
+_MD_NUMBER = re.compile(r"^\s{0,6}\d+[.)]\s+", re.M)
+_MD_EMPHASIS = re.compile(r"\*\*|__|`")
+
+
+def _as_reference(text: str) -> str:
+    """Strip the formatting that makes supplied copy look like a script.
+
+    Layer 1 forbids markdown in speech, yet the client's text arrives full of
+    it -- bold, bullets, headings. Leaving it in primes document-shaped output
+    and contradicts the persona in the same breath. Only the markers go; every
+    word the client wrote survives.
+    """
+    text = _MD_HEADING.sub("", text)
+    text = _MD_BULLET.sub("", text)
+    text = _MD_NUMBER.sub("", text)
+    return _MD_EMPHASIS.sub("", text).strip()
+
+
 def _business_layer(brief: Brief) -> str:
     """Layer 3 -- rendered from the brief. The only genuinely per-client text."""
     lines = [f"# Layer 3 — Business: {brief.business}", ""]
@@ -92,7 +112,27 @@ def _business_layer(brief: Brief) -> str:
     if brief.topic:
         lines.append(f"The subject of the call is {brief.topic}.")
     if brief.products:
-        lines += ["", "## What we offer", brief.products]
+        # Framed as reference, and de-formatted. On the live path this field is
+        # the UI editor text verbatim, which for MB Solar was a bold-markdown
+        # FAQ written in finished sentences. Nothing told the model it was
+        # reference rather than script, so it read it out: the compiled prompt
+        # said "MB Solar Hub is a solar installation aggregator platform... You
+        # do not install. The selected vendor does the installation." and the
+        # agent said "MB Solar Hub ane platform, mee roof ki suitable verified
+        # solar vendors ni connect chestundi, installation vendor chesedi."
+        # The markdown made it worse by contradicting Layer 1's "no markdown".
+        lines += [
+            "",
+            "## What we offer — FACTS YOU KNOW, NOT LINES YOU SAY",
+            "",
+            "Never read any of this out. It is written to inform you, not to be "
+            "spoken. When a caller asks what this is, answer from it in your own "
+            "spoken Telugu, in one or two short sentences, the way you would "
+            "explain it to a neighbour. Reading it back word for word is the "
+            "single clearest sign to a caller that they are talking to a machine.",
+            "",
+            _as_reference(brief.products),
+        ]
     if brief.customer_situation:
         lines += ["", "## Who you are calling", brief.customer_situation]
     if brief.vocabulary:

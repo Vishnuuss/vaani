@@ -48,6 +48,7 @@ from api.services.pipecat.worker_runner import (
     run_pipeline_worker,
     wait_for_pipeline_worker_started,
 )
+from api.services.vaani.brain_processor import ReplyFilter
 from api.services.workflow.dto import ReactFlowDTO
 from api.services.workflow.initial_context import merge_external_initial_context
 from api.services.workflow.pipecat_engine import PipecatEngine
@@ -484,7 +485,13 @@ async def execute_text_chat_pending_turn(
         initial_context=base_initial_context,
     )
 
-    llm = create_llm_service(user_config, correlation_id=mps_correlation_id)
+    # Text chat runs the same model on the same prompt as a phone call, so it
+    # produces the same malformed replies -- the eval battery caught a
+    # two-question turn here that the voice path already filters. Same bounds,
+    # same sanitizer, so the free text-chat battery stays a true proxy for a call.
+    llm = create_llm_service(
+        user_config, correlation_id=mps_correlation_id, reply_bounds=True
+    )
     inference_llm = llm
     variable_extraction_llm = (
         create_llm_service(
@@ -652,6 +659,10 @@ async def execute_text_chat_pending_turn(
     pipeline = Pipeline(
         [
             llm,
+            # Upstream of the aggregator, so the cleaned text is what lands in
+            # history -- an uncleaned blob teaches the next turn the same shape.
+            # No CallState here: there is no phone to hang up.
+            ReplyFilter(),
             capture_processor,
             assistant_context_aggregator,
             pipeline_metrics_aggregator,

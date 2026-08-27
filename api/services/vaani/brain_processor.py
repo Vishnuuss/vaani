@@ -88,11 +88,24 @@ class StateInjector(FrameProcessor):
 class ReplyFilter(FrameProcessor):
     """Sanitises the reply and enforces the hard rules before TTS."""
 
-    def __init__(self, injector: StateInjector):
+    def __init__(self, injector: "StateInjector | None" = None):
+        """`injector` is the voice path's call state.
+
+        Text chat has no CallState and no phone to hang up, but it runs the same
+        model on the same prompt and so produces the same malformed replies --
+        the eval battery caught a two-question turn there. Passing None gives
+        the sanitising half without the voice-only half, which lets one processor
+        serve both paths and keeps the eval a true proxy for a call.
+        """
         super().__init__()
         self._injector = injector
         self._sanitizer = ReplySanitizer()
         self._spoken = ""
+
+    def _note_mode(self) -> None:
+        """`MODE: END` is how the agent hangs up. Text chat has nothing to hang up."""
+        if self._injector and self._sanitizer.mode == "END":
+            self._injector.state.must_end = True
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -106,8 +119,7 @@ class ReplyFilter(FrameProcessor):
 
         if isinstance(frame, LLMTextFrame):
             speakable = self._sanitizer.feed(frame.text)
-            if self._sanitizer.mode == "END":
-                self._injector.state.must_end = True
+            self._note_mode()
             if not speakable:
                 return
             frame = LLMTextFrame(speakable)
@@ -117,8 +129,7 @@ class ReplyFilter(FrameProcessor):
             # Always drain: the old filter had no flush here, so a short reply
             # with no trailing newline could be swallowed whole.
             tail = self._sanitizer.finish()
-            if self._sanitizer.mode == "END":
-                self._injector.state.must_end = True
+            self._note_mode()
             if tail:
                 self._spoken += tail
                 await self.push_frame(LLMTextFrame(tail), direction)
@@ -129,7 +140,8 @@ class ReplyFilter(FrameProcessor):
                 )
             report = guardrails.check(
                 self._spoken,
-                closing=guardrails.must_close(self._injector.state))
+                closing=bool(self._injector)
+                and guardrails.must_close(self._injector.state))
             if not report.ok:
                 # The text is already on its way to TTS by now, so this cannot
                 # retract it -- it is recorded so the offending line lands in
