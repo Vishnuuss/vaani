@@ -962,6 +962,7 @@ def create_llm_service_from_provider(
     temperature: float | None = None,
     bill_to: str | None = None,
     usage_context: str | None = None,
+    hedge: int = 1,
 ):
     """Create an LLM service from explicit provider/model/api_key.
 
@@ -971,6 +972,9 @@ def create_llm_service_from_provider(
         usage_context: Optional tag describing what the LLM instance is used for
             (e.g. "voicemail_detection"). Sent as request metadata by the Dograh
             provider; ignored by other providers.
+        hedge: Race this many identical completions per turn and keep whichever
+            answers first. Groq only, and only worth it on the conversational
+            LLM. 1 (the default) is ordinary single-request behaviour.
     """
     logger.info(f"Creating LLM service: provider={provider}, model={model}")
     if provider in (
@@ -996,14 +1000,20 @@ def create_llm_service_from_provider(
             **kwargs,
         )
     elif provider == ServiceProviders.GROQ.value:
-        return GroqLLMService(
-            api_key=api_key,
-            settings=GroqLLMSettings(
-                model=model,
-                temperature=0.1,
-                extra=_groq_llm_extra(model),
-            ),
+        settings = GroqLLMSettings(
+            model=model,
+            temperature=0.1,
+            extra=_groq_llm_extra(model),
         )
+        if hedge > 1:
+            # Vaani owns this policy: see api/services/vaani/hedged_llm.py for
+            # the measurement that justifies paying for a second copy.
+            from api.services.vaani.hedged_llm import HedgedGroqLLMService
+
+            return HedgedGroqLLMService(
+                api_key=api_key, settings=settings, hedge=hedge
+            )
+        return GroqLLMService(api_key=api_key, settings=settings)
     elif provider == ServiceProviders.OPENROUTER.value:
         kwargs = {}
         if base_url:
@@ -1320,8 +1330,16 @@ def create_llm_service(
     user_config,
     correlation_id: str | None = None,
     usage_context: str | None = None,
+    hedge: int = 1,
 ):
-    """Create and return appropriate LLM service based on user configuration."""
+    """Create and return appropriate LLM service based on user configuration.
+
+    `hedge` > 1 races that many identical completions per turn and keeps
+    whichever answers first (see api/services/vaani/hedged_llm.py). It defaults
+    OFF so only the conversational LLM opts in: extraction, voicemail and
+    summarisation are not on the caller's critical path, and hedging those would
+    double their cost to save latency nobody is waiting on.
+    """
     provider = user_config.llm.provider
     model = user_config.llm.model
     api_key = user_config.llm.api_key
@@ -1361,6 +1379,7 @@ def create_llm_service(
         api_key,
         correlation_id=correlation_id,
         usage_context=usage_context,
+        hedge=hedge,
         **kwargs,
     )
 

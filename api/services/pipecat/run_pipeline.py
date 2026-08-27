@@ -13,6 +13,7 @@ from api.schemas.workflow_configurations import (
     # Re-exported: test_run_pipeline_realtime_turn_config imports these two
     # from THIS module, not from the schema. Turn-taking itself moved to
     # api/services/vaani/turn_taking.py; these names stay for that contract.
+    DEFAULT_LLM_HEDGE,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SPECULATION_ENABLED,
     DEFAULT_TURN_START_MIN_WORDS,
@@ -755,7 +756,13 @@ async def _run_pipeline_impl(
             audio_config,
             correlation_id=mps_correlation_id,
         )
-        llm = create_llm_service(user_config, correlation_id=mps_correlation_id)
+        # The conversational LLM is the only one a caller waits on, so it is the
+        # only one that hedges. Extraction and voicemail keep hedge=1.
+        llm = create_llm_service(
+            user_config,
+            correlation_id=mps_correlation_id,
+            hedge=int(run_configs.get("llm_hedge", DEFAULT_LLM_HEDGE)),
+        )
         inference_llm = None
 
     # A shared LLM cannot carry an extraction usage_context without also tagging

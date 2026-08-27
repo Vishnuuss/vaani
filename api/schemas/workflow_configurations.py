@@ -42,6 +42,13 @@ DEFAULT_TURN_WAIT_FOR_TRANSCRIPT = False
 # flag rather than deleted, in case a long-utterance use case appears.
 DEFAULT_SPECULATION_ENABLED = False
 DEFAULT_CONTEXT_COMPACTION_ENABLED = False
+# Race N identical completions per turn and speak whichever answers first.
+# Measured on Groq gpt-oss-120b (bench/hedge.py, 2026-08-27): one request returns
+# its first speakable token anywhere between 0.289 s and 1.450 s, and a caller
+# experiences the turn they are in, not the median. Two concurrent copies cut p90
+# from 1.132 s to 0.390 s, because the slow tail is a busy-worker effect that a
+# second copy simply lands clear of. Set to 1 to disable.
+DEFAULT_LLM_HEDGE = 2
 
 
 class ExternalPBXFieldMapping(BaseModel):
@@ -112,6 +119,7 @@ class WorkflowConfigurationDefaults(BaseModel):
     )
     turn_wait_for_transcript: bool = DEFAULT_TURN_WAIT_FOR_TRANSCRIPT
     speculation_enabled: bool = DEFAULT_SPECULATION_ENABLED
+    llm_hedge: int = Field(default=DEFAULT_LLM_HEDGE, ge=1, le=3)
     dictionary: str = ""
     context_compaction_enabled: bool = DEFAULT_CONTEXT_COMPACTION_ENABLED
     text_chat_inactivity_timeout_seconds: int = Field(
