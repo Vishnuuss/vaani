@@ -207,3 +207,52 @@ bottleneck.
 only, never persisted, which is why it was argued about instead of read. Now
 emitted as `rtf-latency-breakdown` alongside per-service TTFB (there was no TTS
 metric in the run log at all).
+
+## F15 — Harvested 2,086 production calls; all three training jobs now have data
+Production Dograh has been running Telugu agents for months. READ-ONLY harvest
+(`tools/vaani_harvest.py`, GETs only, cached, never writes):
+
+| output | rows | for |
+|---|---|---|
+| sft.jsonl | 3,803 | distillation corpus (clean turns only) |
+| dpo.jsonl | 313 | labelled negatives, free |
+| turnstops.jsonl | 2,754 | Telugu turn detection |
+| audio_index.jsonl | 651 | SEPARATED caller audio (`recordings/<id>/user.wav`) |
+
+1,355 of 2,086 runs had a real conversation.
+
+**What the old production agents were doing wrong** (the free negatives):
+    226  two questions in one turn
+     42  markdown spoken aloud
+     19  three or more questions in one turn
+     15  blobs / truncated replies
+The multi-question defect is systemic across loan, solar and investment agents --
+not an MB Solar problem. Every fix made today applies to all of them.
+
+## F16 — A Telugu turn detector trained, and its honest ceiling
+`tools/train_turn_detector.py`. Negatives are generated prefixes (the standard
+LiveKit/Smart-Turn construction); the split is by utterance so no prefix leaks
+across it. Scored not on accuracy but at the threshold where false cutoffs stay
+under 2%, because being talked over is the failure Telugu callers complained about.
+
+Two configurations, and the comparison is the finding:
+
+| config | false cutoffs | turns endable early |
+|---|---|---|
+| utterances >= 2 words | 1.4% @ p>=0.82 | **22.2%** |
+| ALL utterances, 1-word included | 1.7% @ p>=0.90 | **9.0%** |
+
+The second is worse and is the honest one. Dropping one-word utterances was
+wrong for this agent -- qualification callers answer "సరే", "అవును", "అనంతపూర్"
+constantly, and each is a finished turn -- so the 22.2% was flattered by
+excluding exactly the cases that matter most.
+
+**Why it drops**: the same short string is genuinely ambiguous. "మా" is a
+complete turn in one call and the start of "మా ఇల్లు సొంతమే అండి" in another.
+Text alone cannot separate them. That is precisely why Smart Turn is an AUDIO
+model -- falling intonation and pause length carry the signal that the transcript
+does not.
+
+**So**: a text-only endpointer is worth ~9% of turns at a safe threshold, which
+is real but small. The 651 separated caller recordings are the path to the rest,
+and that is the next job rather than a claim already banked.
