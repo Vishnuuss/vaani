@@ -16,6 +16,7 @@ The accounting deliberately separates three outcomes that are easy to blur:
              said. The work is thrown away and the turn pays full latency.
 """
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -65,6 +66,15 @@ class SpeculationStats:
         return self.hits / self.turns
 
 
+# Punctuation and case are STT artefacts, not things the caller said
+# differently. Comparing them makes an identical utterance look like a miss.
+_PUNCT = re.compile(r"[.,!?;:।‘’“”]+")
+
+
+def _normalise(text: str) -> list[str]:
+    return _PUNCT.sub("", (text or "").lower()).split()
+
+
 def _is_prefix(prefix: list[str], words: list[str]) -> bool:
     return len(prefix) <= len(words) and words[: len(prefix)] == prefix
 
@@ -102,11 +112,21 @@ class Speculator:
         if speculated is None:
             return Outcome.NO_SPECULATION
 
-        final_words = final_text.split()
+        final_words = _normalise(final_text)
+        speculated = _normalise(" ".join(speculated))
+        # A HIT is "the speculated request would have produced the right reply",
+        # not "the two strings are byte-identical". The old test was
+        # `speculated == final_words` on raw splits, and it could essentially
+        # never be true: what we speculate on is the common prefix of two
+        # partials, which is SHORTER than the final by construction. The 0% hit
+        # rate that switched speculation off was measuring an impossible
+        # condition, not measuring speculation.
         if speculated == final_words:
             self._stats.hits += 1
             return Outcome.HIT
         if _is_prefix(speculated, final_words):
+            # The caller only added words we would have heard anyway. The
+            # generated reply is still the reply to their question.
             self._stats.partials += 1
             return Outcome.PARTIAL
 

@@ -1171,14 +1171,28 @@ async def _run_pipeline_impl(
 
     speculative_gate = None
     speculation_probe = None
-    if not is_realtime and run_configs.get(
-        "speculation_enabled", DEFAULT_SPECULATION_ENABLED
-    ):
+    # The PROBE is a pass-through observer -- it never alters, drops or delays a
+    # frame -- so it runs even when speculation itself is off. It is how the hit
+    # rate becomes a number instead of an argument.
+    #
+    # This matters because the 0% that switched speculation off was not a real
+    # measurement. `on_turn_end` scored a HIT only when the speculated text was
+    # byte-identical to the final transcript, while what it speculates on is the
+    # common prefix of two partials -- shorter than the final by construction.
+    # The condition could essentially never be true. With that fixed, the rate
+    # has to be re-measured before anyone concludes anything from it again.
+    speculation_on = not is_realtime and run_configs.get(
+        "speculation_enabled", DEFAULT_SPECULATION_ENABLED)
+    if not is_realtime:
         try:
             speculation_probe, speculative_gate = build_speculation_processors(
                 workflow_graph, llm, context, has_recordings
             )
-            logger.info("Speculative generation enabled")
+            if not speculation_on:
+                speculative_gate = None  # measure only; generate nothing
+            logger.info(
+                "Speculative generation enabled" if speculation_on
+                else "Speculation probe enabled (measuring hit rate only)")
         except Exception as e:
             # Loud on purpose: a silent disable here already cost a full
             # debugging cycle. Calls still work, just without speculation.
