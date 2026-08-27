@@ -754,6 +754,13 @@ async def execute_text_chat_pending_turn(
 
         if pending_user_message is not None:
             context.add_message({"role": "user", "content": pending_user_message})
+            # Run triage BEFORE the context frame goes to the LLM, so hard stops
+            # (child answered, do-not-call, fraud) are in the state block the
+            # model is about to read. The frame is queued straight onto the LLM
+            # and never passes StateInjector, and text chat produces no
+            # TranscriptionFrame, so the processor's own path cannot fire here.
+            if text_state_injector is not None:
+                text_state_injector.note_user_text(pending_user_message)
             generation_marker = capture_processor.activity_count
             response_window.note_direct_context_request()
             await llm.queue_frame(LLMContextFrame(context))

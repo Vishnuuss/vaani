@@ -169,3 +169,41 @@ Same prompt, production bounds + sanitizer, real Groq:
   child answered   -> apologises and closes
 The playbooks were never absent. The format failure was destroying the replies
 that contained them.
+
+## F14 — CORRECTION: `rtf-latency-measured` was NOT lying (2026-08-27)
+F1 claimed the metric starts its clock while the caller is still speaking, and
+that "real latency was never 2.4s". **That was wrong.** Reading the observer
+(`pipecat/src/pipecat/observers/user_bot_latency_observer.py:245-250`):
+
+    self._user_stopped_time = frame.timestamp - frame.stop_secs
+
+It clocks from the VAD's stop determination MINUS the silence window, i.e. from
+genuine speech-end, and measures to `BotStartedSpeakingFrame`. That is exactly
+perceived latency. The back-solved clock start that looked "mid-speech" was
+mid-speech only against the transcription payload's own timestamps, which are
+STT-relative, not wall-clock speech boundaries.
+
+Reconciling run 7 turn 4 properly:
+
+| segment | seconds |
+|---|---|
+| speech end -> transcript final (endpointing + STT finalisation) | ~1.385 |
+| transcript final -> first audio (LLM + TTS) | 0.872 |
+| **total perceived (what the metric reported)** | **2.256** |
+
+Both numbers were right; they measure different halves. **Perceived latency is
+~2.3s, not 0.87s**, and the dominant term is endpointing + STT finalisation at
+~1.4s -- not the LLM. The project's original diagnosis was correct and I
+contradicted it on bad arithmetic.
+
+Consequence: hedging the LLM was optimising the smaller half. It still removed a
+real 0.74s tail from that half (F8), but it could never have hit a <700ms
+perceived target on its own, and the "hedging did not reproduce live" puzzle in
+F-earlier dissolves -- it did what it does, on the 0.87s that was never the
+bottleneck.
+
+**Where the work has to go**: `user_turn_secs` -- VAD silence + STT finalisation
++ turn-analyzer wait. It was computed on every turn and logged to the server
+only, never persisted, which is why it was argued about instead of read. Now
+emitted as `rtf-latency-breakdown` alongside per-service TTFB (there was no TTS
+metric in the run log at all).

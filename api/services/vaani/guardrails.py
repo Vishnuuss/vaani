@@ -5,9 +5,20 @@ the prompt says "never promise a guaranteed return" in bold, and the agent still
 promised one to a caller who pushed four times. Prose degrades under pressure;
 a regex does not.
 
-This runs on the drafted text BEFORE it reaches TTS. Cheap (microseconds), so it
-costs nothing on the critical path -- unlike a second model call, which is why
-the escalation path is deliberately narrow.
+`ReplyFilter._gate` runs this on each chunk against everything spoken so far,
+BEFORE that chunk reaches TTS, so a violation is caught as it completes rather
+than after the caller has heard the reply. Cheap (microseconds), so it costs
+nothing on the critical path -- unlike a second model call, which is why the
+escalation path is deliberately narrow.
+
+Only `BLOCKING_RULES` replace a reply. The rest are recorded at the end of the
+response and left in place: cutting a caller off mid-sentence for a stray
+asterisk would be worse than the asterisk.
+
+This claimed to run before TTS long before it did. Until 2026-08-27 the only
+caller ran it on `LLMFullResponseEndFrame`, after the audio had streamed, and
+merely logged -- which is why SAFE_FALLBACK, SAFE_CLOSE and correction_note had
+no callers at all.
 """
 
 from __future__ import annotations
@@ -158,6 +169,23 @@ def check(reply: str, *, allow_price: bool = False,
         ))
 
     return report
+
+
+# Rules worth cutting a reply off mid-sentence for. A caller hearing a clause
+# stop short is strange; a caller hearing an invented price, a promise we cannot
+# keep, or another question right after we agreed to leave them alone is a
+# compliance problem. The rest (markdown, length) are cosmetic and the sanitizer
+# already bounds length, so they stay advisory.
+BLOCKING_RULES = frozenset({
+    "no_questions_when_closing",
+    "no_price_quote",
+    "no_guarantee",
+})
+
+
+def blocking(report: "GuardrailReport") -> list["Violation"]:
+    """The violations that justify replacing the reply rather than logging it."""
+    return [v for v in report.violations if v.rule in BLOCKING_RULES]
 
 
 SAFE_FALLBACK = (

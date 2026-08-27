@@ -1288,6 +1288,37 @@ async def _run_pipeline_impl(
             except Exception as e:  # pragma: no cover - diagnostics only
                 logger.debug(f"[latency] breakdown logging failed: {e}")
 
+            # Persist the decomposition, not just the total. Until now this was
+            # logged to the server and nowhere else, so from the run API a turn
+            # was one opaque number -- which is how "endpoint+STT" ended up
+            # being argued about from back-solved arithmetic instead of read
+            # off the record. `user_turn_secs` is the endpoint cost and the ttfb
+            # entries separate LLM from TTS; there was previously no TTS metric
+            # in the run log at all, leaving the second-largest term unobserved.
+            try:
+                ttfbs = {}
+                for m in (breakdown.ttfb or []):
+                    name = getattr(m, "processor", None) or getattr(m, "name", "")
+                    value = getattr(m, "ttfb", None)
+                    if name and value is not None:
+                        ttfbs[str(name)] = round(float(value), 4)
+                payload = {
+                    "endpoint_secs": (
+                        round(breakdown.user_turn_secs, 4)
+                        if breakdown.user_turn_secs is not None else None),
+                    "ttfb": ttfbs,
+                }
+                message = {"type": "rtf-latency-breakdown", "payload": payload}
+                if in_memory_logs_buffer.current_node_id:
+                    message = {**message,
+                               "node_id": in_memory_logs_buffer.current_node_id,
+                               "node_name": in_memory_logs_buffer.current_node_name}
+                await in_memory_logs_buffer.append(message)
+                if ws_sender:
+                    await ws_sender(message)
+            except Exception as e:
+                logger.debug(f"[latency] breakdown event failed: {e}")
+
             # Vaani checks the turn against latency_budget.yaml. That file
             # calls itself "enforced on every turn"; this is where that becomes
             # true. Warn-only in prod by design -- a budget breach must never

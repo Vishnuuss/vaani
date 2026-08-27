@@ -144,3 +144,66 @@ def test_a_colon_in_ordinary_speech_is_not_a_speaker_label():
     text = "సమయం: రేపు ఉదయం పది గంటలకు."
     spoken, _ = run(char_by_char(text))
     assert spoken == text
+
+
+# --- guardrails now block rather than log ------------------------------------
+
+
+class _FakeState:
+    def __init__(self, **kw):
+        self.must_end = kw.get("must_end", False)
+        self.disqualified = kw.get("disqualified", False)
+        self.next_step_agreed = kw.get("next_step_agreed", False)
+        self.no_more_questions = kw.get("no_more_questions", False)
+
+
+class _FakeInjector:
+    def __init__(self, **kw):
+        self.state = _FakeState(**kw)
+
+
+def _filter(**state):
+    from api.services.vaani.brain_processor import ReplyFilter
+
+    f = ReplyFilter.__new__(ReplyFilter)
+    f._injector = _FakeInjector(**state) if state else None
+    f._sanitizer = ReplySanitizer()
+    f._spoken = ""
+    f._blocked = False
+    return f
+
+
+def test_an_invented_price_is_replaced_before_it_is_spoken():
+    from api.services.vaani import guardrails
+
+    f = _filter()
+    out = f._gate("ఇది 45000 రూపాయలు అవుతుంది")
+    assert out == guardrails.SAFE_FALLBACK
+
+
+def test_a_question_after_the_call_is_won_is_replaced():
+    """The most common compliance failure: agreeing to stop, then asking anyway."""
+    from api.services.vaani import guardrails
+
+    f = _filter(next_step_agreed=True)
+    out = f._gate("సరే అండి. మీ ఇంటి రూఫ్ ఎంత ఉంది?")
+    assert out == guardrails.SAFE_CLOSE
+
+
+def test_a_clean_reply_passes_the_gate_untouched():
+    f = _filter()
+    text = "సరేనండి. మీరు ఏ ప్రాంతంలో ఉన్నారు?"
+    assert f._gate(text) == text
+
+
+def test_once_blocked_nothing_further_is_spoken():
+    f = _filter()
+    f._gate("ఇది 45000 రూపాయలు")
+    assert f._gate(" మరియు ఇంకా చాలా ఉంది") == ""
+
+
+def test_markdown_is_advisory_not_blocking():
+    """Cutting a caller off for a stray asterisk is worse than the asterisk."""
+    f = _filter()
+    text = "సరే **అండి**, చెప్పండి."
+    assert f._gate(text) == text

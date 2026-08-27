@@ -105,9 +105,14 @@ def vaani_processor_order(
 
     processors.append(llm)
 
-    # Vaani's brain, second half. Strips the MODE line and enforces the hard
-    # rules BEFORE a single character reaches the speech engine. For a
-    # subsidy-linked product, prompt instructions alone are not control.
+    # Vaani's brain, second half. Sanitises the reply and gates each chunk
+    # against the hard rules before it reaches the speech engine, replacing the
+    # reply outright when a blocking rule trips. For a subsidy-linked product,
+    # prompt instructions alone are not control.
+    #
+    # It also sits upstream of the assistant context aggregator, so the cleaned
+    # text is what lands in history -- an uncleaned blob taught the next turn
+    # the same malformed shape, which is how one bad turn became a run of them.
     if reply_filter:
         processors.append(reply_filter)
 

@@ -60,13 +60,28 @@ class StateInjector(FrameProcessor):
         # Only final transcripts move the call on. Interim ones revise
         # backwards and would make triage flap.
         if isinstance(frame, TranscriptionFrame) and (frame.text or "").strip():
-            result = triage.apply(self.state, frame.text)
-            self.state.advance()
-            if result.any:
-                logger.info(f"triage: {result}")
-            self._refresh()
+            self.note_user_text(frame.text)
 
         await self.push_frame(frame, direction)
+
+    def note_user_text(self, text: str) -> None:
+        """Run triage on one caller utterance and refresh the state block.
+
+        Exposed as a method because not every surface delivers speech. Text chat
+        queues an `LLMContextFrame` straight onto the LLM and never produces a
+        `TranscriptionFrame` at all, so this processor's frame path never fired
+        there -- and with it, none of the hard stops. The eval battery found that
+        the hard way: told "అమ్మ ఇంట్లో లేరు, నేను చిన్న పిల్లని" (a child saying
+        their mother is out) the agent asked the child for the household
+        electricity bill. The pattern matched perfectly; it was simply never run.
+        """
+        if not (text or "").strip():
+            return
+        result = triage.apply(self.state, text)
+        self.state.advance()
+        if result.any:
+            logger.info(f"triage: {result}")
+        self._refresh()
 
     def _refresh(self) -> None:
         """Rebuild the context so the state block is last, and therefore loudest."""
@@ -102,6 +117,37 @@ class ReplyFilter(FrameProcessor):
         self._sanitizer = ReplySanitizer()
         self._spoken = ""
 
+    def _gate(self, candidate: str) -> str:
+        """Judge text BEFORE it is spoken; substitute rather than log.
+
+        The old code ran `guardrails.check` on `LLMFullResponseEndFrame` and its
+        own comment admitted the problem: "the text is already on its way to TTS
+        by now, so this cannot retract it". Meanwhile two docstrings claimed the
+        rules ran "BEFORE a single character reaches the speech engine". They
+        did not, and `SAFE_FALLBACK`, `SAFE_CLOSE` and `correction_note` sat
+        unused because nothing was in a position to use them.
+
+        Checking each chunk against everything spoken so far catches a violation
+        at the moment it completes rather than after the caller has heard the
+        whole reply. Only BLOCKING_RULES trigger a substitution -- cutting a
+        caller off for a stray asterisk would be worse than the asterisk.
+        """
+        if self._blocked:
+            return ""
+        closing = bool(self._injector) and guardrails.must_close(
+            self._injector.state)
+        report = guardrails.check(self._spoken + candidate, closing=closing)
+        hits = guardrails.blocking(report)
+        if not hits:
+            return candidate
+
+        self._blocked = True
+        rules = ", ".join(f"{v.rule}({v.evidence})" for v in hits)
+        logger.warning(f"[guardrail] reply replaced before TTS: {rules}")
+        # Nothing already spoken can be taken back, so the substitution has to
+        # be something that reads as a continuation of it.
+        return guardrails.SAFE_CLOSE if closing else guardrails.SAFE_FALLBACK
+
     def _note_mode(self) -> None:
         """`MODE: END` is how the agent hangs up. Text chat has nothing to hang up."""
         if self._injector and self._sanitizer.mode == "END":
@@ -114,12 +160,16 @@ class ReplyFilter(FrameProcessor):
             # One sanitizer per response; it carries per-reply truncation state.
             self._sanitizer = ReplySanitizer()
             self._spoken = ""
+            self._blocked = False
             await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, LLMTextFrame):
             speakable = self._sanitizer.feed(frame.text)
             self._note_mode()
+            if not speakable:
+                return
+            speakable = self._gate(speakable)
             if not speakable:
                 return
             frame = LLMTextFrame(speakable)
@@ -142,12 +192,14 @@ class ReplyFilter(FrameProcessor):
                 self._spoken,
                 closing=bool(self._injector)
                 and guardrails.must_close(self._injector.state))
-            if not report.ok:
-                # The text is already on its way to TTS by now, so this cannot
-                # retract it -- it is recorded so the offending line lands in
-                # the tuning set instead of disappearing.
+            # Blocking rules were already caught and substituted in-stream by
+            # `_gate`. What is left here is advisory -- markdown, over-length --
+            # recorded so the offending line lands in the tuning set.
+            advisory = [v for v in report.violations
+                        if v.rule not in guardrails.BLOCKING_RULES]
+            if advisory:
                 logger.warning(
-                    "guardrail violation: "
-                    + "; ".join(f"{v.rule}({v.evidence})" for v in report.violations))
+                    "guardrail (advisory): "
+                    + "; ".join(f"{v.rule}({v.evidence})" for v in advisory))
 
         await self.push_frame(frame, direction)

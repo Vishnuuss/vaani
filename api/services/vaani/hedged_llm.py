@@ -47,6 +47,7 @@ cost rises well under 2x. Set `hedge=1` to switch the whole thing off.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from loguru import logger
@@ -104,6 +105,9 @@ class HedgedGroqLLMService(GroqLLMService):
         )
         params = self.build_chat_completion_params(params_from_context)
 
+        # Which copy wins, and how fast, is the only way to tell a working race
+        # from two requests serialised behind the same connection pool.
+        started = time.perf_counter()
         winner: asyncio.Future = asyncio.get_running_loop().create_future()
         entrants: list[asyncio.Task] = []
         failures = 0
@@ -160,6 +164,9 @@ class HedgedGroqLLMService(GroqLLMService):
 
         # Cancel the losers and reclaim their sockets. Their reasoning tokens are
         # already billed; what matters here is not leaking connections.
+        logger.debug(
+            f"[hedge] copy {idx} won after {time.perf_counter() - started:.3f}s"
+        )
         losers = [t for n, t in enumerate(entrants) if n != idx]
         for t in losers:
             t.cancel()
