@@ -109,6 +109,17 @@ def test_full_pipeline_order_is_exact():
     ]
 
 
+def test_partial_responder_sits_between_stt_and_the_aggregator():
+    """Interim frames exist ONLY there -- the aggregator consumes them.
+
+    Anywhere else and it sees zero partials and is silently inert, which is how
+    two features already shipped dead this month.
+    """
+    order = _order(partial_responder="partial_responder")
+    assert order.index("stt") < order.index("partial_responder")
+    assert order.index("partial_responder") < order.index("aggregator.user")
+
+
 def test_speculation_probe_precedes_the_user_aggregator():
     """Regression: after the aggregator it sees zero partials and is inert."""
     order = _order(speculation_probe="speculation_probe")
@@ -119,6 +130,15 @@ def test_state_injector_precedes_the_user_aggregator():
     """Regression: after it, the state block is a turn stale when the LLM fires."""
     order = _order(state_injector="state_injector")
     assert order.index("state_injector") < order.index("aggregator.user")
+
+
+def test_end_call_bridge_sits_after_transport_output():
+    """BotStoppedSpeaking is emitted by the transport when audio finishes.
+
+    Anywhere earlier and the hangup cuts the goodbye off mid-word.
+    """
+    order = _order(end_call_bridge="end_call_bridge")
+    assert order.index("transport.output") < order.index("end_call_bridge")
 
 
 def test_reply_filter_precedes_tts():

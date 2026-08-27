@@ -50,6 +50,8 @@ from api.services.pipecat.speculation.coordinator import SpeculationCoordinator
 from api.services.pipecat.speculation.gate import SpeculativeLLMGate
 from api.services.pipecat.speculation.probe import SpeculationProbe
 from api.services.vaani import latency as vaani_latency
+from api.services.vaani.partial_response import PartialResponder
+from api.services.vaani.end_call_bridge import EndCallBridge
 from api.services.vaani import turn_taking as vaani_turn_taking
 from api.services.vaani import ReplyFilter, StateInjector
 from api.services.vaani import Brief as VaaniBrief
@@ -1133,6 +1135,31 @@ async def _run_pipeline_impl(
             state_injector = None
             reply_filter = None
 
+    # Respond off the newest partial when the turn ends before the STT's final
+    # arrives. Measured on run 3: endpoint+STT was 1.33s of a 1.91s turn, and
+    # nothing on the live path had ever consumed an interim transcript.
+    partial_responder = None
+    if not is_realtime:
+        try:
+            partial_responder = PartialResponder()
+            logger.info("Partial-response enabled (STT finalisation off the critical path)")
+        except Exception as e:
+            logger.error(f"Partial-response DISABLED (setup failed): {e!r}")
+            partial_responder = None
+
+    # Vaani signals the end of a call with "MODE: END", which sets
+    # state.must_end. Until now nothing read that flag except the prompt
+    # renderer, so the agent said goodbye and the line stayed open -- every
+    # server run recorded user_hangup. This is the missing actuator.
+    end_call_bridge = None
+    if state_injector is not None:
+        try:
+            end_call_bridge = EndCallBridge(state=state_injector.state, engine=engine)
+            logger.info("End-call bridge enabled (MODE: END now hangs up)")
+        except Exception as e:
+            logger.error(f"End-call bridge DISABLED (setup failed): {e!r}")
+            end_call_bridge = None
+
     speculative_gate = None
     speculation_probe = None
     if not is_realtime and run_configs.get(
@@ -1179,6 +1206,8 @@ async def _run_pipeline_impl(
             speculation_probe=speculation_probe,
             state_injector=state_injector,
             reply_filter=reply_filter,
+            partial_responder=partial_responder,
+            end_call_bridge=end_call_bridge,
         )
 
     # Create pipeline task with audio configuration

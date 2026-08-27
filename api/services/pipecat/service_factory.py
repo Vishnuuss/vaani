@@ -34,6 +34,7 @@ from pipecat.services.cartesia.tts import (
     CartesiaTTSSettings,
     GenerationConfig,
 )
+from pipecat.services.tts_service import TextAggregationMode
 from pipecat.services.cartesia.turns.stt import CartesiaTurnsSTTService
 from pipecat.services.deepgram.flux.stt import (
     DeepgramFluxSTTService,
@@ -572,6 +573,17 @@ def create_tts_service(
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
+            # Speak as words arrive instead of buffering a whole sentence.
+            # tts_service.py defaults to SENTENCE, which holds text character by
+            # character until sentence-ending punctuation AND a non-whitespace
+            # lookahead, then runs NLTK. Measured on run 3: 0.482s from the
+            # LLM's first token to first audio, while Cartesia's own TTFB is
+            # 0.09-0.19s -- so most of it was buffering, not synthesis.
+            # Cartesia is a websocket service and accepts incremental text, so
+            # it keeps its own prosody context across the stream. pipecat's own
+            # docstring puts SENTENCE at "~200-300ms per sentence" of added
+            # latency; TOKEN streams straight through.
+            text_aggregation_mode=TextAggregationMode.TOKEN,
         )
     elif user_config.tts.provider == ServiceProviders.OPENAI.value:
         kwargs = {}

@@ -36,9 +36,11 @@ DEFAULT_TURN_STOP_STRATEGY = "turn_analyzer"  # semantic, in-process, no network
 # False = the semantic turn detector ends the turn; the transcript is
 # bookkeeping and leaves the latency critical path (~438 ms/turn).
 DEFAULT_TURN_WAIT_FOR_TRANSCRIPT = False
-# Start the LLM on the caller's stable partial prefix. Only an exact
-# text match is replayed; a miss falls through to the normal path.
-DEFAULT_SPECULATION_ENABLED = True
+# OFF. Measured 0% hit rate over 9 real turns: qualification callers answer in
+# two words, so there is never time for two partials to agree before the turn
+# ends. It cost an extra LLM call per turn and returned nothing. Kept behind the
+# flag rather than deleted, in case a long-utterance use case appears.
+DEFAULT_SPECULATION_ENABLED = False
 DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 
 

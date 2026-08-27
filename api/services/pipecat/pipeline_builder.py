@@ -43,6 +43,8 @@ def build_pipeline(
     speculative_gate=None,
     state_injector=None,
     reply_filter=None,
+    partial_responder=None,
+    end_call_bridge=None,
 ):
     """Build the main pipeline.
 
@@ -71,6 +73,8 @@ def build_pipeline(
         speculative_gate=speculative_gate,
         state_injector=state_injector,
         reply_filter=reply_filter,
+        partial_responder=partial_responder,
+        end_call_bridge=end_call_bridge,
     )
 
 

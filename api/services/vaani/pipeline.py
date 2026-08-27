@@ -50,6 +50,8 @@ def vaani_processor_order(
     speculative_gate=None,
     state_injector=None,
     reply_filter=None,
+    partial_responder=None,
+    end_call_bridge=None,
 ) -> list:
     """Return the ordered processor list. Pure — no Pipeline, no side effects.
 
@@ -66,6 +68,14 @@ def vaani_processor_order(
     # LLMContextAggregator consumes InterimTranscriptionFrame and never pushes
     # it downstream. A gate placed after the aggregator sees zero partials and
     # is silently inert -- which is exactly what happened on 2026-08-26.
+    # Takes the STT's finalisation off the critical path: when the turn ends
+    # before a final transcript arrives, promote the newest partial so the LLM
+    # can start. Must sit HERE -- interim frames exist only between STT and the
+    # aggregator, which consumes them. Measured cost of not doing this: 1.33s of
+    # a 1.91s turn.
+    if partial_responder:
+        processors.append(partial_responder)
+
     if speculation_probe:
         processors.append(speculation_probe)
 
@@ -106,10 +116,17 @@ def vaani_processor_order(
     if recording_router:
         processors.append(recording_router)
 
+    processors.append(tts)
+    processors.append(transport.output())
+
+    # AFTER transport.output(): BotStoppedSpeakingFrame is emitted by the
+    # transport once the audio has actually finished playing, which is the only
+    # safe moment to hang up -- earlier and the goodbye is cut off mid-word.
+    if end_call_bridge:
+        processors.append(end_call_bridge)
+
     processors.extend(
         [
-            tts,
-            transport.output(),
             audio_buffer,             # records both directions
             assistant_context_aggregator,
             pipeline_metrics_aggregator,
