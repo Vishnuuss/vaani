@@ -756,12 +756,14 @@ async def _run_pipeline_impl(
             audio_config,
             correlation_id=mps_correlation_id,
         )
-        # The conversational LLM is the only one a caller waits on, so it is the
-        # only one that hedges. Extraction and voicemail keep hedge=1.
+        # The conversational LLM is the only one a caller waits on and the only
+        # one whose output is spoken aloud, so it is the only one that hedges or
+        # bounds its reply. Extraction and voicemail keep both off.
         llm = create_llm_service(
             user_config,
             correlation_id=mps_correlation_id,
             hedge=int(run_configs.get("llm_hedge", DEFAULT_LLM_HEDGE)),
+            reply_bounds=True,
         )
         inference_llm = None
 

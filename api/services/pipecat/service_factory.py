@@ -963,6 +963,7 @@ def create_llm_service_from_provider(
     bill_to: str | None = None,
     usage_context: str | None = None,
     hedge: int = 1,
+    reply_bounds: bool = False,
 ):
     """Create an LLM service from explicit provider/model/api_key.
 
@@ -975,6 +976,9 @@ def create_llm_service_from_provider(
         hedge: Race this many identical completions per turn and keep whichever
             answers first. Groq only, and only worth it on the conversational
             LLM. 1 (the default) is ordinary single-request behaviour.
+        reply_bounds: Cap the reply and stop it at a second speaker's turn label.
+            Conversational replies only -- extraction and voicemail are not
+            spoken to anyone and legitimately return longer output.
     """
     logger.info(f"Creating LLM service: provider={provider}, model={model}")
     if provider in (
@@ -1000,10 +1004,28 @@ def create_llm_service_from_provider(
             **kwargs,
         )
     elif provider == ServiceProviders.GROQ.value:
+        extra = _groq_llm_extra(model)
+        bounds = {}
+        if reply_bounds:
+            # Vaani owns conversational policy. Nothing bounded generation before
+            # this: no stop sequences existed in the request body at all, so a
+            # model that started writing a dialogue script wrote the whole thing
+            # and the TTS spoke it. See api/services/vaani/reply_bounds.py.
+            from api.services.vaani.reply_bounds import (
+                MAX_REPLY_TOKENS,
+                conversational_extra,
+            )
+
+            extra = conversational_extra(extra)
+            # Omitted entirely when unbounded: the settings default is a
+            # NOT_GIVEN sentinel that drops the field from the HTTP body, and
+            # passing None instead would send an explicit null.
+            bounds["max_completion_tokens"] = MAX_REPLY_TOKENS
         settings = GroqLLMSettings(
             model=model,
             temperature=0.1,
-            extra=_groq_llm_extra(model),
+            extra=extra,
+            **bounds,
         )
         if hedge > 1:
             # Vaani owns this policy: see api/services/vaani/hedged_llm.py for
@@ -1331,6 +1353,7 @@ def create_llm_service(
     correlation_id: str | None = None,
     usage_context: str | None = None,
     hedge: int = 1,
+    reply_bounds: bool = False,
 ):
     """Create and return appropriate LLM service based on user configuration.
 
@@ -1339,6 +1362,10 @@ def create_llm_service(
     OFF so only the conversational LLM opts in: extraction, voicemail and
     summarisation are not on the caller's critical path, and hedging those would
     double their cost to save latency nobody is waiting on.
+
+    `reply_bounds` likewise defaults OFF and is for spoken replies only. It caps
+    the completion and halts generation at a second speaker's turn label, so the
+    model cannot write a dialogue script for the TTS to read out.
     """
     provider = user_config.llm.provider
     model = user_config.llm.model
@@ -1380,6 +1407,7 @@ def create_llm_service(
         correlation_id=correlation_id,
         usage_context=usage_context,
         hedge=hedge,
+        reply_bounds=reply_bounds,
         **kwargs,
     )
 

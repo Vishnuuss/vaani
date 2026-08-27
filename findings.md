@@ -91,3 +91,81 @@ Projected end-to-end: 0.355 LLM + ~0.26 TTS/network = **~0.62s perceived**.
 
 Cost: the loser is aborted as soon as the winner emits content, so it bills few
 output tokens, and input is ~96% cached. Expect well under 2x, not 2x.
+
+## F9 — The "move vendors to India" win does not exist (MEASURED 2026-08-27)
+research/latency.md ranked this #1 by ms-saved/risk (100-250ms, "an hour of
+work"). `bench/vendor_rtt.py`, TCP connect from India, 5 reps median:
+
+| vendor | TCP connect | resolved IP | verdict |
+|---|---|---|---|
+| Groq (LLM) | 30.8ms | 104.18.38.236 (Cloudflare) | already India edge |
+| Cartesia (TTS) | 21.1ms | 52.84.205.76 (CloudFront) | already India edge |
+| Sarvam (STT) | 37.8ms | 4.247.234.152 (Azure India) | already India |
+| Smallest.ai | 38.6ms | 65.2.225.63 (AWS ap-south-1) | India |
+| ElevenLabs | 56.6ms | 34.8.184.191 | Singapore-ish |
+| Deepgram | 267.6ms | 38.68.64.132 | US -- and NOT in our stack |
+
+Every vendor on our critical path already terminates in India. Item #1 is closed
+with no change and no gain available.
+
+Caveat kept honest: an Indian TLS edge proves where the CONNECTION lands, not
+where inference runs -- Cloudflare and CloudFront terminate at the edge and
+proxy to origin. What bounds the truth is F8: the hedged first-content time of
+0.355s already contains the full real round trip, whatever path it takes.
+
+## F10 — The agent was broken before it was slow (2026-08-27)
+Run 12 spoke a 272-char blob containing the caller's invented line, the model's
+own note, and the literal control token `MODE: CLOSE`. Scanning every
+`rtf-bot-text` across runs 1-12 shows the same class of defect in runs 3 and 4,
+i.e. it PREDATES the hedging change and is not a regression.
+
+Root causes, all confirmed in code:
+- Nothing bounded generation: `max_completion_tokens` NOT_GIVEN and no `stop`
+  key in the request body at all (`openai/base_llm.py:336-368`).
+- `ReplyFilter` stripped `MODE:` only in FIRST position; run 12's landed
+  mid-blob after a full stop with no newline, so it sailed through to TTS.
+- The blob was written into history verbatim and re-fed every later turn, which
+  is why turn 4 -> 5 -> 6 degraded (272 chars, cut off, then two characters).
+
+## F11 — Two near-outages caught by testing before deploy
+**F11a. A bare `MODE:` stop sequence returns an EMPTY completion.**
+`MODE_PROTOCOL` tells the model to make `MODE: ASK` its first line, so a bare
+stop matches at position 0. Measured, temperature 0:
+    no stop        -> "MODE: ASK\n\n<reply>"
+    stop "MODE:"   -> ""            finish_reason still "stop"
+    stop "\nMODE:" -> full reply
+Nothing upstream flags it; the caller just hears silence on every compliant turn.
+All stop markers must be newline-prefixed. Asserted in test_reply_bounds.py.
+
+**F11b. Groq accepts at most 4 stop sequences.**
+    "'stop' : maximum number of items is 4"   HTTP 400
+Six were configured. That is a 400 on EVERY call, not just a malformed one.
+`conversational_extra` now truncates rather than letting a 400 through.
+
+## F12 — `max_completion_tokens` counts REASONING tokens
+The decisive one. Measured on gpt-oss-120b at reasoning_effort=low, cap 80:
+
+| turn | reasoning | content | finish |
+|---|---|---|---|
+| normal answer | 24 | 35 | stop |
+| bill amount | 51 | 29 | length |
+| "what do you do" | 78 | 2 | length -> EMPTY |
+| frustrated caller | 76 | 4 | length -> EMPTY |
+| "too expensive" | 78 | 2 | length -> EMPTY |
+
+6 of 7 truncated; the three that came back EMPTY are exactly the turns the
+objection playbooks exist for -- the harder the turn, the longer it thinks, so a
+short-reply cap silences the agent precisely where it matters most.
+At cap 400 all 7 finish on `stop`; content never exceeded 44 tokens.
+**A token cap cannot be used as a length policy on a reasoning model.** Length
+is enforced by ReplySanitizer ending the turn at its first question mark, which
+is content-aware and costs no tokens.
+
+## F13 — With the fixes, objection handling works (8/8 clean)
+Same prompt, production bounds + sanitizer, real Groq:
+  "not interested" -> "సరే అండి. ఇప్పటికే ఏదైనా చూసుకున్నారా, లేక ఖర్చు గురించా?"  (one probe)
+  "too expensive"  -> EMI reframe, no discount offered
+  "send whatsapp"  -> agrees AND attaches one question
+  child answered   -> apologises and closes
+The playbooks were never absent. The format failure was destroying the replies
+that contained them.

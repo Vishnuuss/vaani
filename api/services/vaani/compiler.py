@@ -140,7 +140,12 @@ def compile_prompt(brief: Brief) -> str:
     mission = (mission
                .replace("{business}", brief.business)
                .replace("{agent_name}", brief.agent_name)
-               .replace("{topic}", brief.topic or "our service")
+               # An unset topic used to compile to the English words "our
+               # service" inside a Telugu sentence, and the agent said exactly
+               # that on every live call: "మీరు our service గురించి ఎంక్వైరీ
+               # ఇచ్చారు కదా". A generic Telugu noun keeps the greeting in one
+               # language; a client that sets `topic` still gets the specific one.
+               .replace("{topic}", brief.topic or "దీని")
                .replace("{success_definition}",
                         brief.success or "a specific, agreed next step"))
 
