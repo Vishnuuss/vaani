@@ -1171,28 +1171,27 @@ async def _run_pipeline_impl(
 
     speculative_gate = None
     speculation_probe = None
-    # The PROBE is a pass-through observer -- it never alters, drops or delays a
-    # frame -- so it runs even when speculation itself is off. It is how the hit
-    # rate becomes a number instead of an argument.
+    # REVERTED 2026-08-27, same day it was tried. Running the probe on every
+    # call broke live calls: run 92 rang, was answered, and produced ZERO
+    # pipeline events -- the bot never spoke.
     #
-    # This matters because the 0% that switched speculation off was not a real
-    # measurement. `on_turn_end` scored a HIT only when the speculated text was
-    # byte-identical to the final transcript, while what it speculates on is the
-    # common prefix of two partials -- shorter than the final by construction.
-    # The condition could essentially never be true. With that fixed, the rate
-    # has to be re-measured before anyone concludes anything from it again.
-    speculation_on = not is_realtime and run_configs.get(
-        "speculation_enabled", DEFAULT_SPECULATION_ENABLED)
-    if not is_realtime:
+    # The probe is documented as "observe only", and its own `_on_partial` only
+    # logs "would fire". But `_drive_coordinator_partial` calls
+    # `coordinator.on_partial()`, which issues a REAL generation against the
+    # same shared LLM service the live turn is using. With the gate disabled
+    # there was nothing to consume those generations. "Pass-through observer"
+    # was true of the frame path and false of the side effects.
+    #
+    # So the hit rate still needs measuring, but not like this: it needs a probe
+    # that scores the decision WITHOUT calling the model.
+    if not is_realtime and run_configs.get(
+        "speculation_enabled", DEFAULT_SPECULATION_ENABLED
+    ):
         try:
             speculation_probe, speculative_gate = build_speculation_processors(
                 workflow_graph, llm, context, has_recordings
             )
-            if not speculation_on:
-                speculative_gate = None  # measure only; generate nothing
-            logger.info(
-                "Speculative generation enabled" if speculation_on
-                else "Speculation probe enabled (measuring hit rate only)")
+            logger.info("Speculative generation enabled")
         except Exception as e:
             # Loud on purpose: a silent disable here already cost a full
             # debugging cycle. Calls still work, just without speculation.
