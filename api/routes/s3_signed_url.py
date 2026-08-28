@@ -1,5 +1,6 @@
 import re
 import uuid
+from urllib.parse import urlparse
 from typing import Annotated, Any, Dict, Optional, TypedDict
 
 from botocore.exceptions import ClientError
@@ -7,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from api.constants import BACKEND_API_ENDPOINT
 from api.db import db_client
 from api.enums import StorageBackend
 from api.services.auth.depends import get_user
@@ -161,6 +163,56 @@ async def _authorize_and_get_workflow_run(
     return workflow_run
 
 
+# Hosts that only resolve inside the deployment. A URL pointing at one of these
+# cannot be fetched by a browser on someone's laptop.
+_INTERNAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "minio",
+                   "host.docker.internal"}
+
+
+def _is_browser_reachable(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    # A bare service name with no dot only resolves on the container network.
+    return bool(host) and host not in _INTERNAL_HOSTS and "." in host
+
+
+_ARTIFACT_FOR_PREFIX = {
+    "recordings": "recording",
+    "transcripts": "transcript",
+}
+
+
+async def _public_download_url(key: str, workflow_run) -> Optional[str]:
+    """The token-carrying URL for this artifact, if there is one.
+
+    Served by `api/routes/public_download.py`, which streams the object when the
+    object store is not itself reachable -- so it works in exactly the case that
+    makes a signed URL useless.
+    """
+    if workflow_run is None:
+        run_id = _extract_legacy_workflow_run_id(key)
+        if run_id is None:
+            return None
+        try:
+            workflow_run = await db_client.get_workflow_run(run_id)
+        except Exception:
+            return None
+    token = getattr(workflow_run, "public_access_token", None)
+    if not token:
+        return None
+    artifact = _ARTIFACT_FOR_PREFIX.get(key.split("/", 1)[0])
+    if not artifact:
+        return None
+    if "/user." in key:
+        artifact = "user_recording"
+    elif "/bot." in key:
+        artifact = "bot_recording"
+    return (f"{BACKEND_API_ENDPOINT}/api/v1/public/download/workflow/"
+            f"{token}/{artifact}")
+
+
 @router.get(
     "/signed-url",
     response_model=S3SignedUrlResponse,
@@ -230,6 +282,29 @@ async def get_signed_url(
         )
         if not url:
             raise HTTPException(status_code=500, detail="Failed to generate signed URL")
+
+        # The dashboard puts this straight into <audio src=...>, so it has to be
+        # a URL the BROWSER can fetch. A signed URL only qualifies when
+        # MINIO_PUBLIC_ENDPOINT names a publicly resolvable host; when it does
+        # not, this handed the player "http://minio:9000/..." and the Run
+        # Preview sat at 0:00 / 0:00 with DNS_PROBE_FINISHED_NXDOMAIN behind it.
+        #
+        # An authenticated API route cannot replace it either: <audio src> sends
+        # no Authorization header. The public download route is the one URL that
+        # is both browser-fetchable and already carries its own credential, so
+        # that is what gets returned.
+        if not _is_browser_reachable(url):
+            public = await _public_download_url(key, workflow_run)
+            if public:
+                logger.info(
+                    f"Storage endpoint is not browser-reachable; returning the "
+                    f"public download URL for key={key}"
+                )
+                return {"url": public, "expires_in": expires_in}
+            logger.warning(
+                f"Storage endpoint is not browser-reachable and no public token "
+                f"exists for key={key}; returning the raw signed URL"
+            )
 
         logger.info(f"Generated signed URL for key={key}, expires_in={expires_in}s")
         return {"url": url, "expires_in": expires_in}
