@@ -409,3 +409,30 @@ def test_a_violation_mid_speech_is_logged_but_never_spliced():
     f._spoken = "సరే, మీ బిల్లు "
     tail = "45000 రూపాయలు అవుతుంది"
     assert f._gate(tail) == tail
+
+
+# --- the constructor itself, which every other test here bypasses ------------
+
+
+def test_a_real_constructed_filter_has_everything_process_frame_touches():
+    """Run 213 died on every turn with "no attribute '_said'".
+
+    Every other test in this file builds ReplyFilter with __new__ and assigns
+    the fields by hand, so __init__ was never exercised and losing two lines
+    from it was invisible until a live call. This one constructs it the way the
+    pipeline does.
+    """
+    from api.services.vaani.brain_processor import ReplyFilter
+
+    f = ReplyFilter()
+    for attr in ("_injector", "_sanitizer", "_spoken", "_blocked", "_said"):
+        assert hasattr(f, attr), f"__init__ does not set {attr}"
+
+
+def test_a_constructed_filter_can_gate_without_setup():
+    """The failure was an AttributeError inside _gate, so call it for real."""
+    from api.services.vaani.brain_processor import ReplyFilter
+
+    f = ReplyFilter()
+    text = "సరే, మీ నెలవారీ బిల్లు ఎంత?"
+    assert f._gate(text) == text

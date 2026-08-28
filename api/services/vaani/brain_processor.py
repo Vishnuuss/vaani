@@ -152,6 +152,16 @@ class ReplyFilter(FrameProcessor):
         self._injector = injector
         self._sanitizer = ReplySanitizer()
         self._spoken = ""
+        self._blocked = False
+        # Survives across responses: repetition is a property of the CALL, not
+        # of one reply, and this processor lives for the whole call.
+        #
+        # These two were lost in an edit and every turn after the first died
+        # with "'ReplyFilter' object has no attribute '_said'" -- run 213 shows
+        # fourteen pipeline errors and a caller asking "హలో, ఎందుకండీ ఇంత స్టాప్
+        # అయిపోతుంది". The unit tests missed it because they build this object
+        # with __new__ and set the fields by hand, so __init__ never ran.
+        self._said: list[str] = []
 
     def _gate(self, candidate: str) -> str:
         """Judge text BEFORE it is spoken; substitute rather than log.
