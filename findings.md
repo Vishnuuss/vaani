@@ -256,3 +256,33 @@ does not.
 **So**: a text-only endpointer is worth ~9% of turns at a safe threshold, which
 is real but small. The 651 separated caller recordings are the path to the rest,
 and that is the next job rather than a claim already banked.
+
+## F17 — The endpoint cost is Smart Turn having no Telugu (MEASURED, runs 93/95)
+First calls where `endpoint_secs` was read rather than argued about.
+
+| run | endpoint p50 | endpoint min | LLM p50 | total p50 |
+|---|---|---|---|---|
+| 93 (before) | 1.42s | — | 0.28s | 1.90s |
+| 95 (after STT budget 1.17 -> 0.6) | **1.325s** | **0.238s** | 0.215s | **1.67s** |
+
+Two things follow.
+
+**The STT p99 was real but not the whole story.** Cutting it moved total 1.90 -> 1.67s.
+Worth having, and it was free.
+
+**The remainder is the turn analyzer.** `_maybe_trigger_user_turn_stopped` opens with
+`if not self._turn_complete: return`, and `_turn_complete` is set only from
+`EndOfTurnState.COMPLETE` returned by `LocalSmartTurnAnalyzerV3`. The measured
+distribution is bimodal -- min 0.238s against a p50 of 1.325s -- which is the
+signature of a classifier that recognises SOME utterances instantly and misses
+the rest, leaving them to time out.
+
+Smart Turn v3 covers 23 languages and **Telugu is not one of them**. So on most
+Telugu turns it never returns COMPLETE, and the turn ends on a fallback instead.
+That is the ~1.3s, and no amount of STT or LLM tuning touches it.
+
+**This is what the trained turn detector is for.** It is no longer a speculative
+"nice to have": it is the identified blocker on the dominant term. The text-only
+version is worth ~9% of turns at a safe threshold; the 651 separated caller
+recordings are the path to the rest, because prosody carries what the transcript
+cannot.

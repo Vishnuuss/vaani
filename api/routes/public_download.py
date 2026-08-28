@@ -7,7 +7,11 @@ reporting.
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from pathlib import Path
+from urllib.parse import urlparse
+
+import aiohttp
+from fastapi.responses import RedirectResponse, StreamingResponse
 from loguru import logger
 
 from api.db import db_client
@@ -19,6 +23,32 @@ from api.utils.recording_artifacts import (
 
 router = APIRouter(prefix="/public/download")
 
+
+# Hosts that only resolve to something useful from inside the deployment. A
+# signed URL pointing at one of these cannot be followed by a caller.
+_INTERNAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "minio", "host.docker.internal"}
+
+
+def _is_externally_reachable(url: str) -> bool:
+    """Can a caller outside the server actually follow this URL?"""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host or host in _INTERNAL_HOSTS:
+        return False
+    # Container/compose service names have no dots and resolve only on the
+    # internal network.
+    return "." in host
+
+
+async def _stream_object(url: str, chunk_size: int = 64 * 1024):
+    """Relay the object body without buffering the whole file in memory."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            async for chunk in resp.content.iter_chunked(chunk_size):
+                yield chunk
 
 @router.get("/workflow/{token}/{artifact_type}")
 async def download_workflow_artifact(
@@ -114,5 +144,55 @@ async def download_workflow_artifact(
         f"Generated signed URL for {artifact_type}: workflow_run_id={workflow_run.id}, token={token[:8]}..."
     )
 
-    # 5. Redirect to signed URL
-    return RedirectResponse(url=signed_url, status_code=302)
+    # 5. Hand the file over.
+    #
+    # Redirecting is the cheap path and stays the default: the caller fetches
+    # straight from object storage and no bytes cross this API. It only works
+    # when the signed URL is reachable from outside, which depends entirely on
+    # MINIO_PUBLIC_ENDPOINT being set to a real public address.
+    #
+    # When it is not, that variable falls back to "http://localhost:9000"
+    # (api/constants.py:90) and the redirect points the caller at their OWN
+    # machine. Measured on the Vaani deployment 2026-08-28: every recording
+    # 302'd to http://localhost:9000/voice-audio/recordings/96.wav, so no
+    # recording could be downloaded by anyone, in a browser or otherwise.
+    #
+    # The obvious repair -- publish MinIO on its own domain, as the production
+    # install does -- is NOT safe here. `MinioFileSystem` sets a bucket policy
+    # granting anonymous s3:GetObject, s3:PutObject, s3:DeleteObject and
+    # s3:ListBucket to Principal "*" (api/services/filesystem/minio.py:69-85),
+    # with its own comment reading "Only use in local development, not
+    # production!". Exposing that bucket would make every call recording
+    # publicly listable AND publicly deletable.
+    #
+    # So when the signed URL is not externally reachable, this route streams the
+    # object itself over the connection the caller already has. Object storage
+    # stays private, no DNS record is needed, and the token check above remains
+    # the only door.
+    if _is_externally_reachable(signed_url):
+        return RedirectResponse(url=signed_url, status_code=302)
+
+    internal_url = await storage.aget_signed_url(
+        file_path=file_path,
+        expiration=3600,
+        force_inline=inline,
+        use_internal_endpoint=True,
+    )
+    if not internal_url:
+        logger.error(f"No internal URL for {file_path}; cannot stream")
+        raise HTTPException(status_code=500, detail="Failed to read artifact")
+
+    logger.info(
+        f"Public endpoint {signed_url.split('/')[2]!r} is not externally "
+        f"reachable; streaming {artifact_type} through the API instead"
+    )
+    return StreamingResponse(
+        _stream_object(internal_url),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": (
+                f'{"inline" if inline else "attachment"}; '
+                f'filename="{Path(file_path).name}"'
+            )
+        },
+    )
