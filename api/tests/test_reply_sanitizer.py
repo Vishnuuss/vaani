@@ -279,3 +279,25 @@ def test_nothing_follows_the_repair_line():
     f = _filter_with_history([ASKED_ONCE])
     assert f._gate(ASKED_ONCE) == guardrails.REPAIR_LINE
     assert f._gate(" ఇంకా ఏదైనా?") == ""
+
+
+def test_an_acknowledgement_opening_does_not_make_every_turn_a_repeat():
+    """The two fixes must not fight each other.
+
+    The state block now asks for an opening acknowledgement, so every reply
+    starts with the same two words. On the first run the repeat guard read that
+    as a repeat and truncated the question behind it -- the agent started
+    replying "అర్థమైంది సార" and nothing else. Only what follows the
+    acknowledgement decides whether a reply has been said before.
+    """
+    f = _filter_with_history(["అర్థమైంది సార్, మీ నెలవారీ బిల్లు ఎంత?"])
+    other = "అర్థమైంది సార్, మీరు ఏ నగరంలో ఉంటారు?"
+    assert f._gate(other) == other
+
+
+def test_the_same_question_behind_a_different_acknowledgement_is_still_a_repeat():
+    from api.services.vaani import guardrails
+
+    f = _filter_with_history(["సరేనండి, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"])
+    again = "మంచిది, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"
+    assert f._gate(again) == guardrails.REPAIR_LINE

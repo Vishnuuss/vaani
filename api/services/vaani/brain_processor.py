@@ -51,6 +51,25 @@ _REPEAT_PREFIX = 25
 _REPEAT_SIMILARITY = 0.80
 
 
+# The acknowledgement the state block now asks for. It is SUPPOSED to recur --
+# the reference agent opens nearly every turn with one -- so it must not count
+# toward "this reply is a repeat". Without stripping it, the two changes fight:
+# every reply starts "అర్థమైంది సార", the repeat guard sees a match on the
+# opening words and truncates the question that follows. That is exactly what
+# happened on the first run, and the agent started replying "అర్థమైంది సార" and
+# nothing else.
+_LEADING_ACK = re.compile(
+    r"^\W*(సరే(నండి|నం)?|మంచిది|మంచి\s*ఆలోచన|అర్థమైంది|అర్ధమైంది|"
+    r"చాలా\s*సంతోషమండి|అలాగే(నండి)?|కరెక్టే?|ఓకే|తప్పకుండా)"
+    r"[\s,.ఁ-౿]{0,12}?(సార్|అండి|మేడమ్)?\W*",
+    re.IGNORECASE)
+
+
+def _strip_ack(text: str) -> str:
+    """Drop a leading acknowledgement, so only the substance is compared."""
+    return _LEADING_ACK.sub("", (text or "").strip(), count=1)
+
+
 def _normalise(text: str) -> str:
     """Punctuation and spacing are not what makes two replies different."""
     return re.sub(r"[^\wఀ-౿]+", "", (text or "").lower())
@@ -188,13 +207,17 @@ class ReplyFilter(FrameProcessor):
         or prefix test calls those different, and the caller does not.
 
         Each previous reply is truncated to the length seen so far, so a partial
-        is compared against the equivalent part of what was already spoken.
+        is compared against the equivalent part of what was already spoken. The
+        leading acknowledgement is stripped from both first, because it is meant
+        to repeat and would otherwise make every turn look like the last one.
         """
-        head = _normalise(text)
+        head = _normalise(_strip_ack(text))
         if len(head) < _REPEAT_PREFIX:
+            # Either too little to judge, or the whole reply was an
+            # acknowledgement -- which is meant to recur.
             return False
         for prev in self._said:
-            other = _normalise(prev)[: len(head)]
+            other = _normalise(_strip_ack(prev))[: len(head)]
             if not other:
                 continue
             if SequenceMatcher(None, head, other).ratio() >= _REPEAT_SIMILARITY:
