@@ -28,13 +28,27 @@ features it leans on are tail energy, tail ratio and energy slope -- Telugu
 speakers trail off when they are finished, and that is exactly the signal a
 transcript throws away, which is why the text version stalled.
 
-Why logistic regression and 16 numbers
---------------------------------------
-A gradient-boosted version scores 47.8%, better, and needs scikit-learn inside
-the voice container. This is a mean, a scale, sixteen coefficients and an
-intercept -- arithmetic on numpy, which pipecat already depends on. Fourteen
-points of recall is not worth putting a new dependency on the call path, and
-the tree model remains an upgrade if that ever changes.
+Two models, no new dependency
+------------------------------
+The boosted-tree version reaches 43.9% against the regression's 33.9% at the
+same safety bar, and was previously left on the shelf because scoring it needed
+scikit-learn in the voice container. That framed the trade as recall versus a
+dependency, which was wrong: a boosted forest IS a pile of thresholds and
+constants, and sklearn is only the thing that FOUND them. Exported to arrays by
+`tools/export_gbm_turn.py` -- verified bit-exact against sklearn's own
+predictions on all 1,393 clips -- scoring is a walk down 250 short trees. A few
+hundred float comparisons, on numpy, which pipecat already depends on.
+
+So the forest is used when its file is present and the regression remains the
+fallback. Both are loaded the same way and both fail the same way: to `enabled =
+False`, which restores today's silence timeout exactly.
+
+Why this is worth the trouble, measured
+----------------------------------------
+Run 262's endpoint times are bimodal -- 0.403s on the five turns where the
+detector fired, 0.78-1.22s on the eight where it did not. Every turn moved from
+the second group into the first is worth roughly half a second to the caller,
+and that gap is now the whole remaining latency budget.
 
 It can only make things faster
 ------------------------------
@@ -61,6 +75,9 @@ from pipecat.audio.turn.base_turn_analyzer import (
 
 # Where `tools/train_audio_turn.py` writes the exported weights.
 WEIGHTS_PATH = Path(__file__).parent / "models" / "audio_turn_weights.json"
+# The boosted forest, written by `tools/export_gbm_turn.py`. Preferred when
+# present; the regression above is the fallback.
+GBM_PATH = Path(__file__).parent / "models" / "audio_turn_gbm.json"
 
 # The model reads the tail of the utterance; this is how much of it.
 WINDOW_S = 1.5
@@ -141,6 +158,42 @@ def extract_features(x: np.ndarray, sr: int) -> list[float] | None:
     ]
 
 
+class _Forest:
+    """A gradient-boosted forest as flat arrays.
+
+    Deliberately not a class hierarchy of nodes: four parallel lists per tree is
+    exactly what sklearn holds internally, so the export is a copy rather than a
+    reinterpretation, and `tools/export_gbm_turn.py` can prove the two agree to
+    5.6e-16 across every clip in the training set.
+    """
+
+    __slots__ = ("trees", "lr", "init")
+
+    def __init__(self, blob: dict):
+        self.trees = [
+            (np.asarray(t["feature"], dtype=np.int32),
+             np.asarray(t["threshold"], dtype=np.float64),
+             np.asarray(t["left"], dtype=np.int32),
+             np.asarray(t["right"], dtype=np.int32),
+             np.asarray(t["value"], dtype=np.float64))
+            for t in blob["trees"]
+        ]
+        self.lr = float(blob["learning_rate"])
+        self.init = float(blob["init"])
+
+    def probability(self, x: np.ndarray) -> float:
+        total = 0.0
+        for feature, threshold, left, right, value in self.trees:
+            node = 0
+            # A negative feature index marks a leaf; this is sklearn's own
+            # convention, kept so the arrays need no rewriting on export.
+            while feature[node] >= 0:
+                node = (left[node] if x[feature[node]] <= threshold[node]
+                        else right[node])
+            total += value[node]
+        return float(1.0 / (1.0 + np.exp(-(self.init + self.lr * total))))
+
+
 class TeluguTurnParams(BaseTurnParams):
     """Configuration for the Telugu turn analyzer."""
 
@@ -158,7 +211,8 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
 
     def __init__(self, *, sample_rate: int | None = None,
                  params: TeluguTurnParams | None = None,
-                 weights_path: Path | None = None):
+                 weights_path: Path | None = None,
+                 gbm_path: Path | None = None):
         super().__init__(sample_rate=sample_rate)
         self._params = params or TeluguTurnParams()
         self._buffer: list[tuple[float, np.ndarray]] = []
@@ -167,7 +221,28 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._last_probability: float | None = None
         self._mean = self._scale = self._coef = None
         self._intercept = 0.0
-        self.enabled = self._load(weights_path or WEIGHTS_PATH)
+        self._forest = None
+        self.enabled = (self._load_forest(gbm_path or GBM_PATH)
+                        or self._load(weights_path or WEIGHTS_PATH))
+
+    def _load_forest(self, path: Path) -> bool:
+        """The boosted forest, if it was exported. Never fatal."""
+        try:
+            blob = json.loads(Path(path).read_text(encoding="utf-8"))
+            forest = _Forest(blob)
+        except Exception as e:
+            logger.info(f"[telugu-turn] no forest ({e.__class__.__name__}); "
+                        "using the regression")
+            return False
+        self._forest = forest
+        if self._params.threshold is None:
+            self._params.threshold = float(blob.get("threshold") or 0.97)
+        logger.info(
+            f"[telugu-turn] forest enabled, {len(forest.trees)} trees, "
+            f"threshold {self._params.threshold:.2f} "
+            "(43.9% of turns endable early at a 2% false-cutoff bar)"
+        )
+        return True
 
     def _load(self, path: Path) -> bool:
         try:
@@ -230,7 +305,12 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         f = extract_features(x, self._rate)
         if f is None:
             return None
-        z = (np.asarray(f, dtype=np.float64) - self._mean) / self._scale
+        x = np.asarray(f, dtype=np.float64)
+        if self._forest is not None:
+            # The forest splits on RAW feature values; standardising them here
+            # would silently shift every threshold in all 250 trees.
+            return self._forest.probability(x)
+        z = (x - self._mean) / self._scale
         return float(1.0 / (1.0 + np.exp(-(float(z @ self._coef) + self._intercept))))
 
     def append_audio(self, buffer: bytes, is_speech: bool) -> EndOfTurnState:
