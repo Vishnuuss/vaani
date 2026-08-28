@@ -12,6 +12,7 @@ from answering whatever was actually said.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,6 +24,30 @@ class Phase(Enum):
     PITCHING = "pitching"
     CLOSING = "closing"
     WRAPPING = "wrapping"
+
+
+# Telugu marks a yes/no question by suffixing the AA vowel sign to the verb --
+# వస్తుందా, దొరుకుతుందా, పెట్టాలా -- with no "?" and no change in
+# word order. Looking for "?" or wh-words alone caught 5 of 8 real caller
+# questions and missed exactly the ones that matter: "will I get power in the
+# rainy season", "can I get a loan", "do I need a battery".
+#
+# The statement forms end in a different vowel sign (వస్తుంది "it comes"),
+# so the ending is what separates them.
+_QUESTION_WORDS = re.compile(
+    r"(\?|ఎంత|ఎక్కడ|ఎప్పుడు|ఎలా|ఏమిటి|ఏంటి|ఏమి|ఎందుకు|ఎవరు|ఎన్ని|ఏది|ఏవి|"
+    r"(what|when|where|how|why|which|who|can|do|does|is|are))",
+    re.IGNORECASE)
+
+# Ends on the AA sign: the Telugu interrogative particle.
+_QUESTION_PARTICLE = re.compile(r"[ఀ-౿]ా\s*[?.!]?\s*$")
+
+
+def _is_question(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    return bool(_QUESTION_WORDS.search(t)) or bool(_QUESTION_PARTICLE.search(t))
 
 
 @dataclass
@@ -145,6 +170,26 @@ class CallState:
                         "If they did not answer the last one, do NOT repeat it. "
                         "Say you could not hear them and ask them to say it "
                         "again -- once, in different words."
+                    )
+                # A caller who asked something must be ANSWERED before anything
+                # else. Layer 2 has said "Answer, then ask -- never defer" from
+                # the beginning and it lost every time, because this block is
+                # the last thing the model reads and it was ending with "NEXT
+                # QUESTION TO ASK". Measured on the live agent: asked
+                # "సోలార్ ప్యానెల్ ఎన్ని సంవత్సరాలు వస్తుంది?", "వర్షాకాలంలో
+                # కరెంట్ వస్తుందా?", "లోన్ దొరుకుతుందా?" -- every single one got
+                # "అర్థమైంది. మీ నెలవారీ బిల్లు ఎంత?" and no answer at all.
+                # The acknowledgement made it worse: it now says "understood"
+                # and then ignores them.
+                if _is_question(self.last_user_text):
+                    lines.append(
+                        "THEY ASKED YOU A QUESTION. Answer it FIRST, in one or "
+                        "two short sentences, from the facts in your business "
+                        "layer. If the facts do not cover it, say plainly that "
+                        "you will have the team confirm -- never invent a "
+                        "number, a brand or a promise. ONLY THEN ask your own "
+                        "question. Asking your question without answering "
+                        "theirs is the single fastest way to lose this call."
                     )
                 if self.last_user_text:
                     lines.append(

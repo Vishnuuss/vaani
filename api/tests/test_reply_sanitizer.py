@@ -326,3 +326,46 @@ def test_the_acknowledgement_opening_is_not_itself_a_repeat():
     f = _filter_said(["అర్థమైంది సార్, మీ నెలవారీ బిల్లు ఎంత?"])
     other = "అర్థమైంది సార్, మీరు ఏ నగరంలో ఉంటారు?"
     assert f._gate(other) == other
+
+
+# --- a caller's question must be answered, not stepped over ------------------
+
+
+@pytest.mark.parametrize("text", [
+    "సోలార్ ప్యానెల్ ఎన్ని సంవత్సరాలు వస్తుంది?",
+    "వర్షాకాలంలో కరెంట్ వస్తుందా",      # AA particle, no "?"
+    "లోన్ దొరుకుతుందా",
+    "బ్యాటరీ కూడా పెట్టాలా",
+    "సబ్సిడీ ఉందా",
+    "మీ కంపెనీ ఎక్కడ ఉంది",
+])
+def test_a_real_caller_question_is_recognised(text):
+    """Telugu marks a yes/no question with a trailing AA sign, not with "?".
+
+    Every one of these was asked of the live agent and answered with
+    "అర్థమైంది. మీ నెలవారీ బిల్లు ఎంత?" -- acknowledged and then ignored.
+    """
+    from api.services.vaani.state import _is_question
+
+    assert _is_question(text)
+
+
+@pytest.mark.parametrize("text", [
+    "రెండు వేలు వస్తుంది", "అనంతపూర్", "సరే", "సొంత ఇల్లు", "నా పేరు రాణి",
+])
+def test_a_plain_answer_is_not_mistaken_for_a_question(text):
+    from api.services.vaani.state import _is_question
+
+    assert not _is_question(text)
+
+
+def test_the_state_block_demands_an_answer_before_the_next_question():
+    st = _state(last_user_text="లోన్ దొరుకుతుందా")
+    block = st.render()
+    assert "THEY ASKED YOU A QUESTION" in block
+    assert "Answer it FIRST" in block
+
+
+def test_no_such_demand_when_they_simply_answered():
+    st = _state(last_user_text="రెండు వేలు వస్తుంది")
+    assert "THEY ASKED YOU A QUESTION" not in st.render()
