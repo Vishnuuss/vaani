@@ -1053,9 +1053,30 @@ class PipecatEngine:
         """Check whether a call has been disposed by the engine"""
         return self._call_disposed
 
+    def attach_vaani_state(self, state) -> None:
+        """Let Vaani contribute facts it established deterministically.
+
+        The LLM extractor cannot be trusted with an appointment. Run 262 shows
+        why: the caller agreed to a visit without naming a time, the agent
+        announced one anyway, and the stored record was `assessment_agreed:
+        true` with no day and no hour in it -- so the vendor had nothing to act
+        on. Vaani parses the time from the caller's own words and knows the
+        difference between consenting and choosing, so that value is authored
+        here rather than inferred.
+        """
+        self._vaani_state = state
+
     async def get_gathered_context(self) -> dict:
         """Get the gathered context including extracted variables."""
-        return self._gathered_context.copy()
+        gathered = self._gathered_context.copy()
+        booked = getattr(getattr(self, "_vaani_state", None), "appointment_iso", "")
+        if booked:
+            gathered["appointment_time"] = booked
+            gathered["extracted_variables"] = {
+                **(gathered.get("extracted_variables") or {}),
+                "appointment_time": booked,
+            }
+        return gathered
 
     async def _open_mcp_sessions(self) -> None:
         """Connect every MCP-category tool referenced by any workflow node.

@@ -1143,6 +1143,10 @@ async def _run_pipeline_impl(
                 workflow_name=getattr(workflow, "name", "") or "",
                 filler_state=filler_state,
             )
+            # So a booked appointment reaches the saved lead record. Without
+            # this the time is agreed on the call and then lost.
+            if hasattr(engine, "attach_vaani_state"):
+                engine.attach_vaani_state(state_injector.state)
             logger.info(
                 f"Vaani brain enabled: {len(_vaani_prompt):,}-char compiled prompt, "
                 f"{len(state_injector.state.required_fields)} qualification field(s)"
