@@ -107,6 +107,32 @@ DEFAULT_LLM_HEDGE = 3
 # who is complaining about quality.
 DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.45
 
+# OFF. Measured on run 267 and switched off the same night it shipped.
+#
+# The idea was sound: 0.92s of every gap is silence, so put a short "సరే" into
+# it the moment the caller stops. The implementation fired the filler at the VAD
+# stop, about 200ms after they finished -- and the real reply still took another
+# second to arrive behind it.
+#
+# Run 267's bot track holds 30 audio bursts against 18 logged sentences. Twelve
+# of the extras are fillers, and the gap between a filler and the sentence it was
+# supposed to introduce is 1.0-1.8s:
+#
+#     36.80s  filler 0.17s        113.52s  filler 0.37s
+#     37.80s  the sentence        115.34s  the sentence
+#
+# So the caller heard a stray word, then a second of silence, then the answer.
+# That is worse than the silence alone: silence reads as thinking, while a word
+# followed by silence reads as a machine that has lost its place. The client
+# heard it immediately and described it as "aaa in the middle".
+#
+# The feature is kept rather than deleted because the diagnosis points at a
+# fixable design: a filler has to land LATE in the gap, not at the start of it --
+# played only once the reply is known to be slow, so what follows it is the
+# answer rather than more waiting. That needs a real call to verify, so it stays
+# off until then.
+DEFAULT_FILLERS_ENABLED = False
+
 
 class ExternalPBXFieldMapping(BaseModel):
     """Map one gathered-context value to a provider-native field."""

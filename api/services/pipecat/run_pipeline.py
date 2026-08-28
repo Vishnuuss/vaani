@@ -8,6 +8,7 @@ from api.db import db_client
 from api.enums import WorkflowRunMode
 from api.errors.failure import mark_failure_reported
 from api.schemas.workflow_configurations import (
+    DEFAULT_FILLERS_ENABLED,
     DEFAULT_MAX_CALL_DURATION_SECONDS,
     DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS,
     # Re-exported: test_run_pipeline_realtime_turn_config imports these two
@@ -1173,6 +1174,8 @@ async def _run_pipeline_impl(
                     getattr(user_turn_strategies, "stop", None)),
                 voice=(getattr(user_config.tts, "voice", None) or "anushka").lower(),
                 sample_rate=audio_config.transport_out_sample_rate,
+                enabled=run_configs.get("fillers_enabled",
+                                        DEFAULT_FILLERS_ENABLED),
             )
             logger.info(f"Filler player {'active' if filler_player.active else 'inert'}")
         except Exception as e:
