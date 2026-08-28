@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import time
+from difflib import SequenceMatcher
 from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
@@ -63,6 +64,67 @@ _QUESTION_CLITIC = re.compile(r"\S\s+యా(\s|[?.!,]|$)")
 _QUESTION_EN = re.compile(
     r"(possible|available|worth it|how much|how many|what about|"
     r"tell me|explain|any idea|will (it|you|i)|should i)", re.IGNORECASE)
+
+
+def _norm(text: str) -> str:
+    """Strip punctuation and spacing so two spellings of one sentence compare equal."""
+    return re.sub(r"[^\wఀ-౿]+", "", (text or "").lower())
+
+
+def echoes_agent(text: str, spoken: list) -> bool:
+    """Is this the agent's own voice coming back down the line?
+
+    Run 270 is a call with no human content in it at all:
+
+        AGENT   సరే, మీ పేరు,        CALLER  సరే, మీ పేరు?
+        AGENT   మీ నెల బిల్లు ఎంత     CALLER  మీ నెల బిల్లు
+        AGENT   మంచిది, మీ           CALLER  మంచిది.
+
+    Every "caller" line is the sentence the agent had just spoken. Run 261 was
+    the same, and was proved acoustically: the caller track matched the agent
+    track delayed 300ms, correlating 0.88 on the envelope. The phone is on
+    speakerphone and hears itself.
+
+    Left alone this runs away. The agent speaks, hears itself, treats it as an
+    interruption, abandons its sentence, answers itself, and hears that too --
+    which is why run 270 collapsed into "మంచిది / మంచిది / సరే / సరే" and never
+    reached a single real question.
+
+    Telling the client not to use speakerphone is not a fix. Customers will, and
+    the agent has to survive it. This cannot stop the audio arriving, but it can
+    stop the agent TREATING it as the caller, which is the part that runs away.
+
+    Compared against the agent's recent utterances only, and only for a
+    containment match: echo is a prefix of what was said, because the agent gets
+    cut off partway through hearing itself.
+    """
+    t = _norm(text)
+    if len(t) < 4:
+        # Too short to attribute. "ఆ" is both an echo fragment and a real
+        # backchannel, and silencing real callers is worse than hearing an echo.
+        return False
+    for said in list(spoken)[-3:]:
+        s_norm = _norm(said)
+        if not s_norm:
+            continue
+        if t in s_norm or s_norm in t:
+            return True
+        # Echo comes back through the speaker, the room and the phone codec, so
+        # the STT mishears the tail of it: run 270's "మీకు మీ స్వంత" returned as
+        # "మీకు మీ సూచి". Containment misses that; similarity does not.
+        #
+        # 0.55 sits in a measured gap, not a guessed one. Scored against every
+        # echo line in run 270 and every real answer in run 269:
+        #
+        #     echo lines        0.67 - 1.00
+        #     real answers      0.11 - 0.44
+        #
+        # Nothing lands between 0.44 and 0.67, so the threshold has room on both
+        # sides rather than being tuned to the edge of the data.
+        head = s_norm[:len(t) + 6]
+        if SequenceMatcher(None, t, head).ratio() >= 0.55:
+            return True
+    return False
 
 
 def _is_question(text: str) -> bool:

@@ -73,7 +73,7 @@ def _strip_ack(text: str) -> str:
 def _normalise(text: str) -> str:
     """Punctuation and spacing are not what makes two replies different."""
     return re.sub(r"[^\wఀ-౿]+", "", (text or "").lower())
-from api.services.vaani.state import CallState
+from api.services.vaani.state import CallState, echoes_agent
 
 
 class StateInjector(FrameProcessor):
@@ -110,6 +110,13 @@ class StateInjector(FrameProcessor):
         electricity bill. The pattern matched perfectly; it was simply never run.
         """
         if not (text or "").strip():
+            return
+        # The agent's own voice, echoed back by a speakerphone. Acting on it is
+        # what turned run 270 into a call with no human content in it -- see
+        # state.echoes_agent. Dropped before triage, before the state block, and
+        # before it can become "what the caller said".
+        if echoes_agent(text, self.state.asked):
+            logger.info(f"[echo] ignoring the agent's own words: {text[:60]!r}")
             return
         result = triage.apply(self.state, text)
         # Give the state block something concrete to acknowledge.
