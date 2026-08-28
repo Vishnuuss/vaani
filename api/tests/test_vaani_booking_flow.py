@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from api.services.vaani import triage
 from api.services.vaani.booking import IST
 from api.services.vaani.state import CallState
@@ -110,3 +112,53 @@ def test_a_non_booking_field_still_gets_its_normal_question():
     block = st.render()
     assert "NEXT QUESTION TO ASK" in block
     assert "OFFER EXACTLY THESE TWO TIMES" not in block
+
+
+# --- run 266: a number is not a time -----------------------------------------
+#
+# The worst regression this project has shipped. The booking parser ran on every
+# caller utterance, so an answer to the BILL question became an appointment:
+#
+#   AGENT   సరే, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా ఉంటుంది?
+#   CALLER  మూడు లక్షలు                                    (three lakhs)
+#   AGENT   రేపు మధ్యాహ్నం three oclock కి మీ సైట్ అసెస్‌మెంట్ బుక్ చేసుకున్నాం.
+#
+# Stored: monthly_bill 300000, appointment_time 2026-08-29T15:00. The same digit
+# read twice. The call ended after 38 seconds, on turn three, having asked
+# nothing about location, property, roof or name -- and having promised a vendor
+# visit the caller was never offered.
+
+
+@pytest.mark.parametrize("said", [
+    "మూడు లక్షలు",
+    "ఫైవ్ లాక్స్",
+    "10 లక్షల రూపాయలకు",
+    "300000 rupees",
+    "టెన్ టు ట్వంటీ లాక్స్",
+    "రెండు వేలు",
+])
+def test_an_amount_is_never_read_as_a_time(said):
+    from api.services.vaani.booking import parse_slot
+    assert parse_slot(said) is None, f"{said!r} is money, not a clock"
+
+
+def test_nothing_books_before_a_slot_has_been_offered():
+    """Run 266 replayed. On turn three there is no question a time answers."""
+    st = CallState(
+        required_fields=["monthly_bill", "location", "assessment_agreed"],
+        questions={"monthly_bill": "బిల్లు ఎంత?", "location": "ఏ ప్రాంతం?",
+                   "assessment_agreed": "షెడ్యూల్ చేయాలా?"},
+    )
+    st.render()                      # asking the BILL, not for a time
+    triage.apply(st, "మూడు లక్షలు")
+    assert st.appointment_iso == ""
+    assert st.offered == (), "no slots were offered, so none can be chosen"
+
+
+def test_a_time_still_books_once_slots_are_on_the_table():
+    """The gate must not break real booking."""
+    st = state()
+    st.render()                      # offers two slots
+    assert st.offered, "the booking field must offer slots"
+    triage.apply(st, "రేపు ఉదయం ten o clock")
+    assert st.appointment_iso

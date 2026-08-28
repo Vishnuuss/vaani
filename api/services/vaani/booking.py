@@ -76,6 +76,18 @@ NUMBER_WORDS = {
     "పన్నెండు": 12,
 }
 
+# Money, not a clock. Run 266: the caller answered the BILL question with
+# "మూడు లక్షలు" (three lakhs) and the number 3 was read as 3 oclock -- the agent
+# announced "రేపు మధ్యాహ్నం three oclock కి బుక్ చేసుకున్నాం", stored
+# 2026-08-29T15:00, and hung up 38 seconds into the call. The bill was recorded
+# as 300000 and the appointment as 15:00: the same digit, twice.
+#
+# Any of these words means the number in the sentence is an amount. A time is
+# never "lakhs".
+MONEY = re.compile(
+    r"(లక్ష|లచ్చ|వేల|వెయ్యి|కోటి|రూపాయ|రుపీ|బిల్లు|lakh|lac|crore|thousand|"
+    r"rupee|rupees|rs\.?|₹|यूनिट|यूनिट्स|units?)", re.IGNORECASE)
+
 # Consent to meet. NOT a time -- see the module docstring.
 AGREEMENT = re.compile(
     r"(సరే|అలాగే|ఓకే|ok(ay)?|బాగుంటుంది|బాగుంది|కుదురుతుంది|పర్వాలేదు|"
@@ -210,6 +222,10 @@ def parse_slot(text: str, now: datetime | None = None) -> datetime | None:
     """
     t = (text or "").strip()
     if not t:
+        return None
+    if MONEY.search(t):
+        # An amount, not an appointment. Reading one as the other books a visit
+        # the caller never agreed to and ends the call -- run 266.
         return None
     now = (now or datetime.now(IST)).astimezone(IST)
     low = t.lower()

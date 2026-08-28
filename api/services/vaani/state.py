@@ -144,6 +144,19 @@ class CallState:
         """
         if self.appointment_iso or booking.declined(text):
             return False
+        # Nothing is a time until a time has been ASKED for.
+        #
+        # Run 266 is why this gate exists. The parser ran on every caller
+        # utterance, so "మూడు లక్షలు" -- an answer to the BILL question, on turn
+        # three of a qualification call -- was read as 3 oclock. The agent
+        # announced a booking, saved 2026-08-29T15:00, and ended the call after
+        # 38 seconds. The caller had never been offered a slot at all.
+        #
+        # A number only becomes a time once the agent has put two slots to them
+        # and is waiting for an answer. Before that there is no question a time
+        # could be the answer to.
+        if not self.offered:
+            return False
         when = booking.parse_slot(text)
         if when is None:
             return False
