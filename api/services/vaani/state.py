@@ -96,9 +96,19 @@ class CallState:
                 if f not in self.known
                 and self.ask_counts.get(f, 0) >= self.MAX_ASKS_PER_FIELD]
 
-    def note_asked(self, field_name: str) -> None:
-        if field_name:
-            self.ask_counts[field_name] = self.ask_counts.get(field_name, 0) + 1
+    def commit_ask(self) -> None:
+        """Spend one ask, at the moment the agent actually says it.
+
+        Counted on speech rather than on prompt-building because they are not
+        the same event. Run 218's caller interrupted constantly, and every
+        fragment -- "హలో", a cough, a half word -- rebuilds the prompt. Counting
+        there would burn a field's whole budget on interjections the agent never
+        answered, and drop a question that was never actually put to him.
+        """
+        if self.pending_ask:
+            self.ask_counts[self.pending_ask] = (
+                self.ask_counts.get(self.pending_ask, 0) + 1)
+            self.pending_ask = ""
 
     @property
     def elapsed_s(self) -> int:
@@ -118,6 +128,8 @@ class CallState:
     # How many times each field has been asked for, so a caller is never
     # interrogated about the same thing a third time.
     ask_counts: dict = field(default_factory=dict)
+    # The field the current prompt nominates, not yet spoken.
+    pending_ask: str = ""
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -181,7 +193,7 @@ class CallState:
             nxt = self.still_need[0] if self.still_need else ""
             if nxt and self.questions.get(nxt):
                 lines.append(f'NEXT QUESTION TO ASK: "{self.questions[nxt]}"')
-                self.note_asked(nxt)
+                self.pending_ask = nxt
                 # The client's complaint, in one word: "no confirmations". The
                 # reference agent opens nearly every turn with a two-word
                 # acknowledgement -- "మంచిది", "సరేనండి", "చాలా సంతోషమండి" --

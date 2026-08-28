@@ -206,11 +206,13 @@ def apply(state, text: str) -> Triage:
         # Believe them at once. The field they are being re-asked is the one
         # currently at the head of the checklist, so exhausting its budget stops
         # it being asked a third time -- which is what ended run 218.
-        pending = state.still_need
-        if pending:
-            state.ask_counts[pending[0]] = state.MAX_ASKS_PER_FIELD
+        field_name = state.pending_ask or (
+            state.still_need[0] if state.still_need else "")
+        if field_name:
+            state.ask_counts[field_name] = state.MAX_ASKS_PER_FIELD
+            state.pending_ask = ""
             logger.info(f"triage: caller says they already answered "
-                        f"{pending[0]!r}; moving on")
+                        f"{field_name!r}; moving on")
 
     if result.next_step_agreed:
         state.next_step_agreed = True

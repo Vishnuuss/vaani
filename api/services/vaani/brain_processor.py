@@ -279,6 +279,9 @@ class ReplyFilter(FrameProcessor):
                 # is actually prevented now.
                 if self._injector is not None:
                     self._injector.state.asked.append(self._spoken.strip()[:90])
+                    # The question was really put to the caller. Only now does
+                    # it count against that field's two-ask budget.
+                    self._injector.state.commit_ask()
             self._sanitizer = ReplySanitizer()
             self._spoken = ""
             self._blocked = False
