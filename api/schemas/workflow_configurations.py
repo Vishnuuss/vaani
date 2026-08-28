@@ -48,7 +48,20 @@ DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 # experiences the turn they are in, not the median. Two concurrent copies cut p90
 # from 1.132 s to 0.390 s, because the slow tail is a busy-worker effect that a
 # second copy simply lands clear of. Set to 1 to disable.
-DEFAULT_LLM_HEDGE = 2
+# THREE, not two. Re-measured 2026-08-28 against the prompt that is actually
+# live, which is larger than the one the original hedge=2 figure came from:
+#
+#     hedge-2   p50 0.653   p90 0.761
+#     hedge-3   p50 0.325   p90 0.405
+#
+# -0.33s at the median. Run 217 shows why that is the number left to win: its
+# one turn that came in at 0.715s had endpoint 0.361 AND llm 0.224, while every
+# slower turn on the same call had an llm of 0.58-0.62. The endpoint is fixed;
+# the LLM's spread is what stands between a good turn and a slow one.
+#
+# The losers are cancelled as soon as the winner produces content and the input
+# is ~96% cached, so a third copy bills a few dozen reasoning tokens.
+DEFAULT_LLM_HEDGE = 3
 # How long the turn-stop strategy will wait for the STT's FINAL transcript,
 # measured from true speech end.
 #
