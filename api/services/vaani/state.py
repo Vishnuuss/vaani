@@ -183,13 +183,22 @@ class CallState:
                 # and then ignores them.
                 if _is_question(self.last_user_text):
                     lines.append(
-                        "THEY ASKED YOU A QUESTION. Answer it FIRST, in one or "
-                        "two short sentences, from the facts in your business "
-                        "layer. If the facts do not cover it, say plainly that "
-                        "you will have the team confirm -- never invent a "
-                        "number, a brand or a promise. ONLY THEN ask your own "
-                        "question. Asking your question without answering "
-                        "theirs is the single fastest way to lose this call."
+                        "THEY ASKED YOU A QUESTION. Respond to it FIRST, in "
+                        "one or two short sentences, then ask your own.
+"
+                        "  - If your business facts cover it, answer from them.
+"
+                        "  - If they do NOT, say so out loud: that you will "
+                        "have the team confirm. That is a complete, acceptable "
+                        "answer.
+"
+                        "  - Never invent a number, a price, a saving, a "
+                        "location, an address or a brand.
+"
+                        "MOVING TO YOUR QUESTION WITHOUT RESPONDING TO THEIRS "
+                        "IS NOT ALLOWED. Saying only \"అర్థమైంది\" and then "
+                        "asking your question counts as ignoring them, and it "
+                        "is the fastest way to lose this call."
                     )
                 if self.last_user_text:
                     lines.append(
