@@ -263,15 +263,16 @@ def test_non_realtime_can_opt_back_to_speech_timeout():
     assert isinstance(strategies[0], SpeechTimeoutUserTurnStopStrategy)
 
 
-def test_non_realtime_can_use_turn_analyzer_stop_strategy(monkeypatch):
-    # Turn-taking moved to api/services/vaani/turn_taking.py, so the analyzer
-    # is constructed there now. run_pipeline still exposes the same functions.
-    monkeypatch.setattr(
-        vaani_turn_taking,
-        "LocalSmartTurnAnalyzerV3",
-        lambda *, params: params,
-    )
+def test_non_realtime_can_use_turn_analyzer_stop_strategy():
+    """The configured silence timeout must reach whichever analyzer is used.
 
+    This asserted through a monkeypatched LocalSmartTurnAnalyzerV3 and read
+    `stop_secs` off it directly. The analyzer is now TeluguTurnAnalyzer --
+    Smart Turn v3 has no Telugu, so on a Telugu call it rarely returns COMPLETE
+    and every turn ends on this timeout instead. Reading it off `params` goes
+    through `BaseTurnParams`, which both analyzers share, so the check no longer
+    depends on which one is in place.
+    """
     strategies = _create_non_realtime_user_turn_stop_strategies(
         {"turn_stop_strategy": "turn_analyzer", "smart_turn_stop_secs": 1.5},
         uses_external_turns=False,
@@ -279,7 +280,22 @@ def test_non_realtime_can_use_turn_analyzer_stop_strategy(monkeypatch):
 
     assert len(strategies) == 1
     assert isinstance(strategies[0], TurnAnalyzerUserTurnStopStrategy)
-    assert strategies[0]._turn_analyzer.stop_secs == 1.5
+    assert strategies[0]._turn_analyzer.params.stop_secs == 1.5
+
+
+def test_the_turn_analyzer_understands_telugu():
+    """Smart Turn v3 covers 23 languages and Telugu is not among them.
+
+    Using it on this agent means the analyzer almost never fires and the turn
+    ends on a stopwatch -- 0.693s of a 1.05s turn on run 213.
+    """
+    from api.services.vaani.telugu_turn import TeluguTurnAnalyzer
+
+    strategies = _create_non_realtime_user_turn_stop_strategies(
+        {"turn_stop_strategy": "turn_analyzer"}, uses_external_turns=False)
+    analyzer = strategies[0]._turn_analyzer
+    assert isinstance(analyzer, TeluguTurnAnalyzer)
+    assert analyzer.enabled, "the trained weights must ship with the package"
 
 
 def test_external_turn_stt_uses_longer_stop_timeout():

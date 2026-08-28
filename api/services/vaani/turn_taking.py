@@ -32,6 +32,10 @@ that. If false interruptions appear on real Telugu calls, raise this first.
 
 from __future__ import annotations
 
+from api.services.vaani.telugu_turn import (
+    TeluguTurnAnalyzer,
+    TeluguTurnParams,
+)
 from api.schemas.workflow_configurations import (
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SMART_TURN_STOP_SECS,
@@ -128,14 +132,32 @@ def create_user_turn_stop_strategies(
     strategy = run_configs.get("turn_stop_strategy", DEFAULT_TURN_STOP_STRATEGY)
 
     if strategy == "turn_analyzer":
-        smart_turn_params = SmartTurnParams(
-            stop_secs=run_configs.get(
-                "smart_turn_stop_secs", DEFAULT_SMART_TURN_STOP_SECS
-            )
+        stop_secs = run_configs.get(
+            "smart_turn_stop_secs", DEFAULT_SMART_TURN_STOP_SECS
         )
+        # Smart Turn v3 covers 23 languages and Telugu is not one of them, so on
+        # a Telugu call it rarely returns COMPLETE and the turn ends on the
+        # silence timeout instead of on a decision. Measured on run 213 that
+        # timeout was 0.693s of a 1.05s turn -- the largest single cost, larger
+        # than the LLM at 0.245s.
+        #
+        # TeluguTurnAnalyzer is trained on this agent's own caller recordings
+        # and ends 33.9% of turns early at under a 2% false-cutoff rate. On the
+        # turns it is not confident about it returns INCOMPLETE, which leaves
+        # today's behaviour exactly as it is: it can make a turn faster, never
+        # slower. If its weights are missing it reports `enabled = False` and we
+        # fall back rather than run a detector that can never fire.
+        analyzer = TeluguTurnAnalyzer(params=TeluguTurnParams(stop_secs=stop_secs))
+        if not analyzer.enabled:
+            logger.warning(
+                "[turn] Telugu analyzer unavailable; falling back to Smart Turn "
+                "v3, which has no Telugu and will mostly time out"
+            )
+            analyzer = LocalSmartTurnAnalyzerV3(
+                params=SmartTurnParams(stop_secs=stop_secs))
         return [
             TurnAnalyzerUserTurnStopStrategy(
-                turn_analyzer=LocalSmartTurnAnalyzerV3(params=smart_turn_params),
+                turn_analyzer=analyzer,
                 # Let the semantic turn detector end the turn on its own verdict
                 # instead of waiting for the final transcript (measured 438 ms
                 # p50 after flush). The transcript becomes bookkeeping and comes
