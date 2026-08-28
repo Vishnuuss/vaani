@@ -1,0 +1,197 @@
+"""Turning "yes, that works" into an actual appointment.
+
+What run 262 did, and why it is not booking
+--------------------------------------------
+The agent offered two slots, the caller agreed, and the agent confirmed:
+
+    AGENT   మీకు రేపు ఉదయం ten oclock లేదా ఈ రోజు afternoon two oclock ...?
+    CALLER  ఆ బాగుంటుంది, ఓకే నాకైతే ఓకే
+    AGENT   సరే సుబ్బరాజు, రేపు ఉదయం ten oclockకి మా వేండర్ వస్తారు
+
+The saved record for that call reads `assessment_agreed: true` and nothing else.
+No day, no time. Nobody can act on that: the vendor does not know when to go,
+and the caller was told a time that exists only in a transcript.
+
+Two separate defects, and the second is worse
+----------------------------------------------
+1. The agreed slot is never stored.
+2. The caller said "that is fine" to a menu of TWO, which does not name either
+   one -- and the agent silently chose the first and stated it as settled. That
+   is not a booking, it is a guess presented as a fact, and the customer finds
+   out when somebody turns up on the wrong day.
+
+So acceptance and selection are kept apart here. "అలాగే" is consent to meet; it
+is not a time. Only an utterance that identifies WHICH slot produces a booking,
+and anything short of that asks once more instead of assuming.
+
+Offers are concrete on purpose
+------------------------------
+"When would suit you?" makes the caller invent a format and produces answers
+nobody can parse. The reference agent the client held up as the standard offers
+a closed choice -- "ఉదయం, మధ్యాహ్నం, లేదా సాయంత్రం" -- and so does this.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+
+# The customers are in India and so is the vendor who has to drive to the site.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+# Nobody wants a site survey at 7am or after dark, and a solar roof survey needs
+# daylight. Offers are clamped into this window.
+FIRST_HOUR = 9
+LAST_HOUR = 18
+
+DAY_WORDS = {
+    "today": 0, "ఈ రోజు": 0, "ఈరోజు": 0, "ఇవాళ": 0, "ఇయ్యాల": 0, "आज": 0,
+    "tomorrow": 1, "రేపు": 1, "कल": 1,
+    "day after": 2, "ఎల్లుండి": 2, "परसों": 2,
+}
+
+# Telugu callers say the hour in English -- "ten oclock", "two" -- while the
+# part of day stays Telugu. Both halves are parsed independently for that reason.
+PART_OF_DAY = {
+    "ఉదయం": 10, "పొద్దున": 10, "పొద్దునే": 10, "morning": 10, "सुबह": 10,
+    "మధ్యాహ్నం": 14, "afternoon": 14, "दोपहर": 14,
+    "సాయంత్రం": 17, "సాయంకాలం": 17, "evening": 17, "शाम": 17,
+}
+
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "ఒకటి": 1, "రెండు": 2, "మూడు": 3, "నాలుగు": 4, "ఐదు": 5, "ఆరు": 6,
+    "ఏడు": 7, "ఎనిమిది": 8, "తొమ్మిది": 9, "పది": 10, "పదకొండు": 11,
+    "పన్నెండు": 12,
+}
+
+# Consent to meet. NOT a time -- see the module docstring.
+AGREEMENT = re.compile(
+    r"(సరే|అలాగే|ఓకే|ok(ay)?|బాగుంటుంది|బాగుంది|కుదురుతుంది|పర్వాలేదు|"
+    r"చేద్దాం|పెట్టుకోండి|అవును|యస్|sure|fine|works)", re.IGNORECASE)
+
+REFUSAL = re.compile(
+    r"(వద్దు|అవసరం\s*లేదు|కుదరదు|కుదరద|ఇష్టం\s*లేదు|no\s*need|not\s*interested|"
+    r"వేరే\s*సమయం|తర్వాత\s*చెప్తా)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Slot:
+    """One offerable appointment time."""
+
+    when: datetime
+
+    @property
+    def iso(self) -> str:
+        return self.when.isoformat()
+
+    def say(self, now: datetime | None = None) -> str:
+        """How the agent reads it aloud.
+
+        The hour is spoken in English because that is what these callers use for
+        numbers, while the day and part-of-day stay Telugu -- which is exactly
+        how run 262's caller and agent both spoke.
+        """
+        today = (now or datetime.now(IST)).astimezone(IST).date()
+        day = {0: "ఈ రోజు", 1: "రేపు", 2: "ఎల్లుండి"}.get(
+            (self.when.date() - today).days, self.when.strftime("%d/%m"))
+        part = ("ఉదయం" if self.when.hour < 12
+                else "మధ్యాహ్నం" if self.when.hour < 16 else "సాయంత్రం")
+        hour12 = self.when.hour if self.when.hour <= 12 else self.when.hour - 12
+        names = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+                 7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
+                 12: "twelve"}
+        return f"{day} {part} {names.get(hour12, str(hour12))} oclock"
+
+
+def _clamp(when: datetime) -> datetime:
+    """Push a time into daylight business hours, moving to the next day if needed."""
+    when = when.replace(minute=0, second=0, microsecond=0)
+    if when.hour < FIRST_HOUR:
+        return when.replace(hour=FIRST_HOUR)
+    if when.hour >= LAST_HOUR:
+        return (when + timedelta(days=1)).replace(hour=FIRST_HOUR)
+    return when
+
+
+def offer_slots(now: datetime | None = None) -> tuple[Slot, Slot]:
+    """Two concrete, distinguishable options.
+
+    Deliberately on DIFFERENT days as well as different times. Two slots on one
+    day are easy to confuse on a noisy phone line, and a confused caller is the
+    booking that goes wrong.
+    """
+    now = (now or datetime.now(IST)).astimezone(IST)
+    first = _clamp(now.replace(hour=10) + timedelta(days=1))
+    second = _clamp(now.replace(hour=16) + timedelta(days=2))
+    return Slot(first), Slot(second)
+
+
+def parse_slot(text: str, now: datetime | None = None) -> datetime | None:
+    """The specific time the caller named, or None if they did not name one.
+
+    None is the important return value. It means "they have not chosen", which
+    must lead to one more question -- never to picking a slot on their behalf.
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+    now = (now or datetime.now(IST)).astimezone(IST)
+    low = t.lower()
+
+    day_offset = None
+    for word, offset in DAY_WORDS.items():
+        if word in low or word in t:
+            day_offset = offset
+            break
+
+    part_hour = None
+    for word, h in PART_OF_DAY.items():
+        if word in t or word in low:
+            part_hour = h
+            break
+    hour = part_hour
+
+    # An explicit clock time wins over the part of day: "ఉదయం ten oclock" is
+    # ten, not the generic morning slot.
+    m = re.search(r"\b(\d{1,2})\s*(?::\s*\d{2})?\s*(o\s*.?\s*clock|గంట|बजे)?", low)
+    named = int(m.group(1)) if m and 1 <= int(m.group(1)) <= 24 else None
+    if named is None:
+        for word, n in NUMBER_WORDS.items():
+            pattern = (rf"(?<![a-z]){re.escape(word)}(?![a-z])" if word.isascii()
+                       else re.escape(word))
+            if re.search(pattern, low if word.isascii() else t):
+                named = n
+                break
+    if named is not None:
+        if named <= 12 and part_hour is not None and part_hour >= 12:
+            named += 12                      # "మధ్యాహ్నం two" -> 14:00
+        elif named <= 7 and part_hour is None:
+            named += 12                      # a bare "five" about a site visit
+        hour = named
+
+    if day_offset is None and hour is None:
+        return None
+    if day_offset is None:
+        # A time with no day means the next occurrence of it.
+        day_offset = 0 if (hour or 0) > now.hour else 1
+    if hour is None:
+        hour = 10                            # a day with no time: mid-morning
+
+    when = (now + timedelta(days=day_offset)).replace(
+        hour=min(max(hour, 0), 23), minute=0, second=0, microsecond=0)
+    if when <= now:
+        when += timedelta(days=1)
+    return _clamp(when)
+
+
+def agreed(text: str) -> bool:
+    """They are willing to meet. Says nothing about WHEN."""
+    t = text or ""
+    return bool(AGREEMENT.search(t)) and not REFUSAL.search(t)
+
+
+def declined(text: str) -> bool:
+    return bool(REFUSAL.search(text or ""))

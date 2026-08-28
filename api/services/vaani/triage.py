@@ -214,6 +214,11 @@ def apply(state, text: str) -> Triage:
             logger.info(f"triage: caller says they already answered "
                         f"{field_name!r}; moving on")
 
+    # A named time books the visit. Bare consent deliberately does not: see
+    # CallState.note_booking and run 262.
+    if hasattr(state, "note_booking") and state.note_booking(text):
+        logger.info(f"triage: appointment set for {state.appointment_iso}")
+
     if result.next_step_agreed:
         state.next_step_agreed = True
     if result.buying_signal:

@@ -43,6 +43,7 @@ def build_pipeline(
     speculative_gate=None,
     state_injector=None,
     reply_filter=None,
+    filler_player=None,
     partial_responder=None,
     end_call_bridge=None,
 ):
@@ -73,6 +74,7 @@ def build_pipeline(
         speculative_gate=speculative_gate,
         state_injector=state_injector,
         reply_filter=reply_filter,
+        filler_player=filler_player,
         partial_responder=partial_responder,
         end_call_bridge=end_call_bridge,
     )

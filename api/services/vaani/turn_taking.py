@@ -32,6 +32,8 @@ that. If false interruptions appear on real Telugu calls, raise this first.
 
 from __future__ import annotations
 
+from loguru import logger
+
 from api.services.vaani.telugu_turn import (
     TeluguTurnAnalyzer,
     TeluguTurnParams,
@@ -171,3 +173,19 @@ def create_user_turn_stop_strategies(
         ]
 
     return [SpeechTimeoutUserTurnStopStrategy()]
+
+
+def analyzer_from(strategies) -> object | None:
+    """The turn analyzer inside a stop strategy, if there is one.
+
+    The filler player needs the SAME analyzer instance the turn strategy is
+    using -- it reads the probability that model just computed rather than
+    running its own. Building a second one would score different audio and the
+    two would disagree about whether the caller had finished.
+    """
+    for strategy in strategies or []:
+        analyzer = getattr(strategy, "_turn_analyzer", None) or getattr(
+            strategy, "turn_analyzer", None)
+        if analyzer is not None:
+            return analyzer
+    return None

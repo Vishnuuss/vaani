@@ -52,6 +52,7 @@ def vaani_processor_order(
     reply_filter=None,
     partial_responder=None,
     end_call_bridge=None,
+    filler_player=None,
 ) -> list:
     """Return the ordered processor list. Pure — no Pipeline, no side effects.
 
@@ -122,6 +123,20 @@ def vaani_processor_order(
         processors.append(recording_router)
 
     processors.append(tts)
+
+    # AFTER tts and immediately before the transport. It plays a short Telugu
+    # filler into the silence while the reply is still being produced -- run 262
+    # measured 0.921s of endpoint+STT against 0.290s of LLM, so most of every
+    # gap is dead air the caller sits through.
+    #
+    # Here and nowhere else. It must reach the transport's audio queue directly,
+    # so the filler and the real reply play in sequence instead of on top of
+    # each other, and no ducking or cancellation logic is needed. Placed before
+    # `tts` it would have to survive that processor; placed after
+    # `transport.output()` it would never be heard at all.
+    if filler_player:
+        processors.append(filler_player)
+
     processors.append(transport.output())
 
     # AFTER transport.output(): BotStoppedSpeakingFrame is emitted by the

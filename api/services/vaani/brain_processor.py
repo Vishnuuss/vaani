@@ -39,7 +39,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from api.services.vaani import guardrails, triage
+from api.services.vaani import fillers, guardrails, triage
 from api.services.vaani.compiler import MODE_PROTOCOL, Brief
 from api.services.vaani.reply_sanitizer import ReplySanitizer
 
@@ -139,7 +139,8 @@ class StateInjector(FrameProcessor):
 class ReplyFilter(FrameProcessor):
     """Sanitises the reply and enforces the hard rules before TTS."""
 
-    def __init__(self, injector: "StateInjector | None" = None):
+    def __init__(self, injector: "StateInjector | None" = None,
+                 filler_state=None):
         """`injector` is the voice path's call state.
 
         Text chat has no CallState and no phone to hang up, but it runs the same
@@ -150,6 +151,10 @@ class ReplyFilter(FrameProcessor):
         """
         super().__init__()
         self._injector = injector
+        # Set when a filler has just been spoken. The state block asks the model
+        # to open with "సరే"/"మంచిది", and the filler has usually just said one
+        # of those -- without this the caller hears the same word twice.
+        self._filler_state = filler_state
         self._sanitizer = ReplySanitizer()
         self._spoken = ""
         self._blocked = False
@@ -296,6 +301,13 @@ class ReplyFilter(FrameProcessor):
             speakable = self._gate(speakable)
             if not speakable:
                 return
+            # A filler has just said "సరే"; saying it again is the agent
+            # stammering. Only the first chunk of the reply is trimmed, and only
+            # when a filler actually played.
+            if not self._spoken and self._filler_state is not None                     and self._filler_state.consume():
+                speakable = fillers.strip_leading_ack(speakable)
+                if not speakable:
+                    return
             frame = LLMTextFrame(speakable)
             self._spoken += speakable
 

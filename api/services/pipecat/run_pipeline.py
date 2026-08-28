@@ -56,6 +56,7 @@ from api.services.vaani.partial_response import PartialResponder
 from api.services.vaani.end_call_bridge import EndCallBridge
 from api.services.vaani import turn_taking as vaani_turn_taking
 from api.services.vaani import ReplyFilter, StateInjector
+from api.services.vaani.filler_player import FillerPlayer, FillerState
 from api.services.vaani import Brief as VaaniBrief
 from api.services.vaani import compile_prompt as compile_vaani_prompt
 from api.services.pipecat.speculation.llm_generator import make_llm_generator
@@ -174,7 +175,8 @@ def compile_vaani_system_prompt(workflow_graph, *, workflow_name: str) -> str:
     return compile_vaani_prompt(brief)
 
 
-def build_vaani_brain(workflow_graph, context, system_prompt: str, *, workflow_name: str):
+def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
+                      workflow_name: str, filler_state=None):
     """Build Vaani's (StateInjector, ReplyFilter) from a Dograh workflow.
 
     A Dograh single-prompt agent already carries what a Vaani `Brief` needs: the
@@ -203,7 +205,7 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *, workflow_n
 
     brief = VaaniBrief(business=workflow_name or "", questions=questions)
     injector = StateInjector(brief, context, system_prompt)
-    return injector, ReplyFilter(injector)
+    return injector, ReplyFilter(injector, filler_state=filler_state)
 
 
 def build_speculation_processors(workflow_graph, llm, context, has_recordings: bool):
@@ -1124,6 +1126,7 @@ async def _run_pipeline_impl(
     # not take the call down, so it degrades to Dograh's plain behaviour.
     state_injector = None
     reply_filter = None
+    filler_state = FillerState()
     if not is_realtime:
         try:
             # The 4-layer Vaani prompt, NOT Dograh's raw node text. What the
@@ -1138,6 +1141,7 @@ async def _run_pipeline_impl(
                 context,
                 _vaani_prompt,
                 workflow_name=getattr(workflow, "name", "") or "",
+                filler_state=filler_state,
             )
             logger.info(
                 f"Vaani brain enabled: {len(_vaani_prompt):,}-char compiled prompt, "
@@ -1147,6 +1151,29 @@ async def _run_pipeline_impl(
             logger.error(f"Vaani brain DISABLED (setup failed): {e!r}")
             state_injector = None
             reply_filter = None
+
+    # A short Telugu filler into the silence while the reply is being built.
+    # Run 262: endpoint+STT 0.921s against an LLM of 0.290s -- most of the gap
+    # is dead air, and a human agent fills it with "సరే..." rather than nothing.
+    #
+    # Gated on the SAME turn analyzer the stop strategy uses, so it only speaks
+    # when that trained model is confident the caller has finished. Without
+    # rendered clips (tools/render_fillers.py) it is inert, and every uncertain
+    # path is silence, so this cannot make a call worse than it is today.
+    filler_player = None
+    if not is_realtime:
+        try:
+            filler_player = FillerPlayer(
+                state=filler_state,
+                turn_analyzer=vaani_turn_taking.analyzer_from(
+                    getattr(user_turn_strategies, "stop", None)),
+                voice=(getattr(user_config.tts, "voice", None) or "anushka").lower(),
+                sample_rate=audio_config.transport_out_sample_rate,
+            )
+            logger.info(f"Filler player {'active' if filler_player.active else 'inert'}")
+        except Exception as e:
+            logger.error(f"Fillers DISABLED (setup failed): {e!r}")
+            filler_player = None
 
     # Respond off the newest partial when the turn ends before the STT's final
     # arrives. Measured on run 3: endpoint+STT was 1.33s of a 1.91s turn, and
@@ -1232,6 +1259,7 @@ async def _run_pipeline_impl(
             speculation_probe=speculation_probe,
             state_injector=state_injector,
             reply_filter=reply_filter,
+            filler_player=filler_player,
             partial_responder=partial_responder,
             end_call_bridge=end_call_bridge,
         )

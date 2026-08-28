@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
+
+from api.services.vaani import booking
 
 
 class Phase(Enum):
@@ -74,6 +77,18 @@ def _is_question(text: str) -> bool:
     )
 
 
+# Fields that mean "agree a visit". These get concrete slots instead of a
+# yes/no question, because run 262 answered the yes/no perfectly and still left
+# nobody knowing when to turn up.
+BOOKING_FIELDS = ("assessment_agreed", "appointment", "callback", "visit",
+                  "site_visit", "schedule")
+
+
+def _is_booking_field(name: str) -> bool:
+    n = (name or "").lower()
+    return any(k in n for k in BOOKING_FIELDS)
+
+
 @dataclass
 class CallState:
     required_fields: list[str] = field(default_factory=list)
@@ -120,6 +135,21 @@ class CallState:
                 if f not in self.known
                 and self.ask_counts.get(f, 0) >= self.MAX_ASKS_PER_FIELD]
 
+    def note_booking(self, text: str) -> bool:
+        """Record an appointment, but only if the caller actually named one.
+
+        Consent is not a time. Run 262's caller said "ఆ బాగుంటుంది, ఓకే" to a
+        menu of two and the agent booked the first one for him. Returning False
+        here is what makes the agent ask which, instead of guessing.
+        """
+        if self.appointment_iso or booking.declined(text):
+            return False
+        when = booking.parse_slot(text)
+        if when is None:
+            return False
+        self.appointment_iso = when.isoformat()
+        return True
+
     def commit_ask(self) -> None:
         """Spend one ask, at the moment the agent actually says it.
 
@@ -154,6 +184,12 @@ class CallState:
     ask_counts: dict = field(default_factory=dict)
     # The field the current prompt nominates, not yet spoken.
     pending_ask: str = ""
+    # The appointment, once the caller has named one. ISO, because a vendor
+    # diary needs a timestamp and not a sentence.
+    appointment_iso: str = ""
+    # The two slots offered, held so a later "the first one" can be resolved
+    # and so the agent never quietly re-offers different times mid-call.
+    offered: tuple = ()
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -205,6 +241,13 @@ class CallState:
         elif self.buying_signal:
             lines.append("STILL_NEED: [] -- CALLER IS READY TO BOOK. Stop "
                          "qualifying. Offer a specific time and close.")
+        elif self.appointment_iso:
+            # Booked. Everything else is now a reason to lose it.
+            when = booking.Slot(datetime.fromisoformat(self.appointment_iso))
+            lines.append(
+                f"STILL_NEED: [] -- BOOKED for {when.say()}. Say that time back "
+                "to them once so they can correct it, thank them, and END THE "
+                "CALL. Ask nothing further.")
         elif self.no_more_questions:
             lines.append("STILL_NEED: [] -- THE CALLER HAS ASKED YOU TO STOP "
                          "ASKING QUESTIONS. Ask nothing at all. Answer what "
@@ -241,7 +284,24 @@ class CallState:
             # `save_with_any` and left to invent a question from it. Spell out
             # the next one in the client's own words.
             nxt = self.still_need[0] if self.still_need else ""
-            if nxt and self.questions.get(nxt):
+            if nxt and _is_booking_field(nxt):
+                # Booking is not a yes/no question. Run 262 asked one, got a
+                # clean "yes", and stored `assessment_agreed: true` with no day
+                # and no time -- so the vendor had nothing to act on and the
+                # caller had been told a time that existed only in a transcript.
+                if not self.offered:
+                    self.offered = booking.offer_slots()
+                first, second = self.offered
+                lines.append(
+                    f'OFFER EXACTLY THESE TWO TIMES, both of them, in these '
+                    f'words: "{first.say()}" or "{second.say()}". '
+                    "Offer nothing else and invent no other time.")
+                lines.append(
+                    "THEY MUST NAME WHICH ONE. If they only say yes, సరే or "
+                    "బాగుంటుంది without naming a time, that is NOT a booking -- "
+                    "ask which of the two, and do not choose for them.")
+                self.pending_ask = nxt
+            elif nxt and self.questions.get(nxt):
                 lines.append(f'NEXT QUESTION TO ASK: "{self.questions[nxt]}"')
                 self.pending_ask = nxt
                 # The client's complaint, in one word: "no confirmations". The
