@@ -223,81 +223,58 @@ def test_the_end_of_response_tail_cannot_bypass_the_gate():
 
 
 # --- never say the same sentence twice ---------------------------------------
+#
+# Prevented in the STATE BLOCK, not in the stream. Blocking a reply that has
+# already begun streaming truncates it, and the eval caught exactly that:
+# callers heard "అర్థమైంది బిల్లు?" and "అర్థమైంది, మీరు ఇల్లు, అపార". A cut-off
+# sentence is worse than the repeat it was preventing.
 
 
-def _filter_with_history(said):
-    from api.services.vaani.brain_processor import ReplyFilter
+def _state(**kw):
+    from api.services.vaani.state import CallState
 
-    f = ReplyFilter.__new__(ReplyFilter)
-    f._injector = None
-    f._sanitizer = ReplySanitizer()
-    f._spoken = ""
-    f._blocked = False
-    f._said = list(said)
-    return f
-
-
-ASKED_ONCE = "సార్, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"
+    st = CallState(required_fields=["monthly_bill", "location"],
+                   questions={"monthly_bill": "మీ నెలవారీ బిల్లు ఎంత?",
+                              "location": "మీరు ఏ ఊరు?"})
+    # still_need is derived from required_fields minus known, so leaving
+    # `known` empty is what puts both fields in the checklist.
+    for k, v in kw.items():
+        setattr(st, k, v)
+    return st
 
 
-def test_asking_the_same_question_again_becomes_a_repair_line():
-    """Run 96 asked this four times word for word.
-
-    The caller's verdict on that call was "you told me nothing". The reference
-    agent never repeats -- it says it could not hear.
-    """
-    from api.services.vaani import guardrails
-
-    f = _filter_with_history([ASKED_ONCE])
-    assert f._gate(ASKED_ONCE) == guardrails.REPAIR_LINE
+def test_the_state_block_lists_what_was_already_asked():
+    """Run 96 asked the same question four times. The model was never shown
+    what it had already said, so it could not avoid repeating it."""
+    st = _state(asked=["సార్, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"])
+    block = st.render()
+    assert "ALREADY ASKED" in block
+    assert "నెలవారీ బిల్లు" in block
 
 
-def test_a_reworded_repeat_is_still_a_repeat():
-    """Run 96 varied the tail while asking the same thing."""
-    from api.services.vaani import guardrails
-
-    f = _filter_with_history([ASKED_ONCE])
-    reworded = "సార్, మీ నెలవారీ బిల్లు సుమారు ఎంత రూపాయలుగా వస్తుంది?"
-    assert f._gate(reworded) == guardrails.REPAIR_LINE
+def test_the_state_block_tells_it_to_repair_rather_than_repeat():
+    st = _state(asked=["సార్, మీ నెలవారీ బిల్లు ఎంత?"])
+    block = st.render()
+    assert "do NOT repeat" in block
+    assert "could not hear" in block
 
 
-def test_a_genuinely_different_question_is_untouched():
-    f = _filter_with_history([ASKED_ONCE])
-    other = "సార్, మీరు ఏ నగరంలో ఉంటారు?"
-    assert f._gate(other) == other
+def test_nothing_about_repeats_appears_before_anything_was_asked():
+    """The first turn has nothing to avoid; the block should not say otherwise."""
+    assert "ALREADY ASKED" not in _state().render()
 
 
-def test_a_short_acknowledgement_may_recur():
-    """"సరే" is not a repeated sentence; it is normal speech."""
-    f = _filter_with_history(["సరే."])
-    assert f._gate("సరే.") == "సరే."
+def test_the_caller_last_words_reach_the_state_block():
+    """The acknowledgement has to refer to something concrete."""
+    st = _state(last_user_text="రెండు వేలు వస్తుంది")
+    block = st.render()
+    assert "THEY JUST SAID" in block
+    assert "రెండు వేలు" in block
 
 
-def test_nothing_follows_the_repair_line():
-    from api.services.vaani import guardrails
-
-    f = _filter_with_history([ASKED_ONCE])
-    assert f._gate(ASKED_ONCE) == guardrails.REPAIR_LINE
-    assert f._gate(" ఇంకా ఏదైనా?") == ""
-
-
-def test_an_acknowledgement_opening_does_not_make_every_turn_a_repeat():
-    """The two fixes must not fight each other.
-
-    The state block now asks for an opening acknowledgement, so every reply
-    starts with the same two words. On the first run the repeat guard read that
-    as a repeat and truncated the question behind it -- the agent started
-    replying "అర్థమైంది సార" and nothing else. Only what follows the
-    acknowledgement decides whether a reply has been said before.
-    """
-    f = _filter_with_history(["అర్థమైంది సార్, మీ నెలవారీ బిల్లు ఎంత?"])
-    other = "అర్థమైంది సార్, మీరు ఏ నగరంలో ఉంటారు?"
-    assert f._gate(other) == other
-
-
-def test_the_same_question_behind_a_different_acknowledgement_is_still_a_repeat():
-    from api.services.vaani import guardrails
-
-    f = _filter_with_history(["సరేనండి, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"])
-    again = "మంచిది, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"
-    assert f._gate(again) == guardrails.REPAIR_LINE
+def test_only_the_recent_questions_are_listed():
+    """A long call would otherwise push the whole transcript back into context."""
+    st = _state(asked=[f"question number {i}" for i in range(10)])
+    block = st.render()
+    assert "question number 9" in block
+    assert "question number 0" not in block

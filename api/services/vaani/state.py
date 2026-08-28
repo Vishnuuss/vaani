@@ -62,6 +62,10 @@ class CallState:
     # What the caller said on the turn just gone, so the acknowledgement has
     # something concrete to refer to instead of being generic.
     last_user_text: str = ""
+    # What WE have already asked. Run 96 asked the same question four times and
+    # the caller said "you told me nothing"; the model cannot avoid repeating
+    # itself if it is never shown what it already said.
+    asked: list = field(default_factory=list)
 
     def advance(self) -> None:
         """Move the phase forward based on what we actually know.
@@ -132,6 +136,16 @@ class CallState:
                 # instruction has been in Layer 2 all along without being obeyed.
                 # Capped at two words on purpose: a long acknowledgement is
                 # audio the caller waits through on every single turn.
+                if self.asked:
+                    recent = "; ".join(f'"{a}"' for a in self.asked[-3:])
+                    lines.append(
+                        f"ALREADY ASKED (do NOT ask any of these again): {recent}"
+                    )
+                    lines.append(
+                        "If they did not answer the last one, do NOT repeat it. "
+                        "Say you could not hear them and ask them to say it "
+                        "again -- once, in different words."
+                    )
                 if self.last_user_text:
                     lines.append(
                         f'THEY JUST SAID: "{self.last_user_text[:80]}"  -- '

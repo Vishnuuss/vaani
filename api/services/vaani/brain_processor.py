@@ -171,17 +171,17 @@ class ReplyFilter(FrameProcessor):
         if self._blocked:
             return ""
 
-        # Repeating a sentence is the defect the client named first. Caught on
-        # the opening of the reply so the caller hears the repair line rather
-        # than most of the question they already heard.
-        provisional = self._spoken + candidate
-        if len(provisional) >= _REPEAT_PREFIX and self._is_repeat(provisional):
-            self._blocked = True
-            logger.warning(
-                f"[repeat] already said this; substituting the repair line: "
-                f"{provisional[:60]!r}"
-            )
-            return guardrails.REPAIR_LINE if not self._spoken else ""
+        # Repetition is NOT policed here. Blocking a reply that has already
+        # started streaming truncates it, and the eval caught exactly that:
+        # "అర్థమైంది బిల్లు?" and "అర్థమైంది, మీరు ఇల్లు, అపార" reached callers
+        # as cut-off fragments. A truncated sentence is worse than the repeat it
+        # was preventing.
+        #
+        # It is prevented at the source instead -- the state block lists what has
+        # already been asked and tells the model to say it could not hear rather
+        # than ask again. That is the same mechanism that made the
+        # acknowledgement stick after prose alone had failed for weeks, and it
+        # cannot cut a sentence in half.
 
         closing = bool(self._injector) and guardrails.must_close(
             self._injector.state)
@@ -236,6 +236,10 @@ class ReplyFilter(FrameProcessor):
             # One sanitizer per response; it carries per-reply truncation state.
             if self._spoken.strip():
                 self._said.append(self._spoken)
+                # Feed it back into the state block, which is where repetition
+                # is actually prevented now.
+                if self._injector is not None:
+                    self._injector.state.asked.append(self._spoken.strip()[:90])
             self._sanitizer = ReplySanitizer()
             self._spoken = ""
             self._blocked = False
