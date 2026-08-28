@@ -161,51 +161,22 @@ class CallState:
                 # instruction has been in Layer 2 all along without being obeyed.
                 # Capped at two words on purpose: a long acknowledgement is
                 # audio the caller waits through on every single turn.
+                # Every line here is re-read and re-reasoned on EVERY turn,
+                # so wording costs latency directly. The first version of these
+                # three rules ran to 1,086 characters and took the LLM's first
+                # token from 0.22s to 0.655s -- total 1.27s to 2.10s on run 206.
+                # Same rules, said once.
                 if self.asked:
-                    recent = "; ".join(f'"{a}"' for a in self.asked[-3:])
-                    lines.append(
-                        f"ALREADY ASKED (do NOT ask any of these again): {recent}"
-                    )
-                    lines.append(
-                        "If they did not answer the last one, do NOT repeat it. "
-                        "Say you could not hear them and ask them to say it "
-                        "again -- once, in different words."
-                    )
-                # A caller who asked something must be ANSWERED before anything
-                # else. Layer 2 has said "Answer, then ask -- never defer" from
-                # the beginning and it lost every time, because this block is
-                # the last thing the model reads and it was ending with "NEXT
-                # QUESTION TO ASK". Measured on the live agent: asked
-                # "సోలార్ ప్యానెల్ ఎన్ని సంవత్సరాలు వస్తుంది?", "వర్షాకాలంలో
-                # కరెంట్ వస్తుందా?", "లోన్ దొరుకుతుందా?" -- every single one got
-                # "అర్థమైంది. మీ నెలవారీ బిల్లు ఎంత?" and no answer at all.
-                # The acknowledgement made it worse: it now says "understood"
-                # and then ignores them.
+                    lines.append(f"ALREADY SAID: {self.asked[-1][:60]!r} "
+                                 "-- do not repeat it; say you could not hear.")
                 if _is_question(self.last_user_text):
                     lines.append(
-                        "THEY ASKED YOU A QUESTION. Respond to it FIRST, "
-                        "in one or two short sentences, then ask your own. "
-                        "If your business facts cover it, answer from them. "
-                        "If they do NOT, say so out loud -- that you will "
-                        "have the team confirm. That is a complete and "
-                        "acceptable answer. Never invent a number, a price, "
-                        "a saving, a location, an address or a brand. "
-                        "MOVING TO YOUR QUESTION WITHOUT RESPONDING TO "
-                        "THEIRS IS NOT ALLOWED: saying only a short "
-                        "acknowledgement and then asking your question "
-                        "counts as ignoring them, and it is the fastest "
-                        "way to lose this call."
-                    )
+                        "THEY ASKED SOMETHING -- answer it first from your "
+                        "facts, or say the team will confirm. Never invent a "
+                        "number, price, location or brand.")
                 if self.last_user_text:
                     lines.append(
-                        f'THEY JUST SAID: "{self.last_user_text[:80]}"  -- '
-                        "open with a TWO-WORD acknowledgement of it "
-                        "(మంచిది / సరేనండి / అర్థమైంది), then ask the question. "
-                        "Never more than two words."
-                    )
-        if self.objections:
-            lines.append(f"OBJECTIONS_RAISED: {self.objections}")
-        if self.disqualified and not self.must_end:
-            lines.append(f"DISQUALIFIED: {self.disqualify_reason}")
+                        f"THEY SAID: {self.last_user_text[:60]!r} "
+                        "-- open with two words (సరే / మంచిది), then ask.")
         lines.append(f"TURN: {self.turn}   CALL_ELAPSED: {self.elapsed_s}s")
         return "\n".join(lines)

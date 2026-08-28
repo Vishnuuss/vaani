@@ -248,36 +248,40 @@ def test_the_state_block_lists_what_was_already_asked():
     what it had already said, so it could not avoid repeating it."""
     st = _state(asked=["సార్, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"])
     block = st.render()
-    assert "ALREADY ASKED" in block
+    assert "ALREADY SAID" in block
     assert "నెలవారీ బిల్లు" in block
 
 
 def test_the_state_block_tells_it_to_repair_rather_than_repeat():
     st = _state(asked=["సార్, మీ నెలవారీ బిల్లు ఎంత?"])
     block = st.render()
-    assert "do NOT repeat" in block
+    assert "do not repeat it" in block
     assert "could not hear" in block
 
 
 def test_nothing_about_repeats_appears_before_anything_was_asked():
     """The first turn has nothing to avoid; the block should not say otherwise."""
-    assert "ALREADY ASKED" not in _state().render()
+    assert "ALREADY SAID" not in _state().render()
 
 
 def test_the_caller_last_words_reach_the_state_block():
     """The acknowledgement has to refer to something concrete."""
     st = _state(last_user_text="రెండు వేలు వస్తుంది")
     block = st.render()
-    assert "THEY JUST SAID" in block
+    assert "THEY SAID" in block
     assert "రెండు వేలు" in block
 
 
-def test_only_the_recent_questions_are_listed():
-    """A long call would otherwise push the whole transcript back into context."""
+def test_only_the_last_question_is_listed():
+    """Every character here is re-read on EVERY turn, so it is kept to one.
+
+    The first version listed three and ran to 1,086 characters, which took the
+    LLM's first token from 0.22s to 0.655s on run 206.
+    """
     st = _state(asked=[f"question number {i}" for i in range(10)])
     block = st.render()
     assert "question number 9" in block
-    assert "question number 0" not in block
+    assert "question number 8" not in block
 
 
 # --- the repeat is caught before anything is spoken, never after -------------
@@ -362,15 +366,15 @@ def test_a_plain_answer_is_not_mistaken_for_a_question(text):
 def test_the_state_block_demands_an_answer_before_the_next_question():
     st = _state(last_user_text="లోన్ దొరుకుతుందా")
     block = st.render()
-    assert "THEY ASKED YOU A QUESTION" in block
-    assert "Respond to it FIRST" in block
+    assert "THEY ASKED SOMETHING" in block
+    assert "answer it first" in block
     # Admitting ignorance must be offered as a complete answer, or the model
     # skips the question instead -- which is what it did for "where is your
     # company", after it stopped inventing "we are in Hyderabad".
-    assert "have the team confirm" in block
-    assert "NOT ALLOWED" in block
+    assert "team will confirm" in block
+    assert "Never invent" in block
 
 
 def test_no_such_demand_when_they_simply_answered():
     st = _state(last_user_text="రెండు వేలు వస్తుంది")
-    assert "THEY ASKED YOU A QUESTION" not in st.render()
+    assert "THEY ASKED SOMETHING" not in st.render()
