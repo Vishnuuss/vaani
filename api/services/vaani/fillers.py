@@ -61,6 +61,15 @@ CACHE_DIR = Path(__file__).parent / "models" / "filler_audio"
 
 # Real Telugu call-centre fillers, not translations of English ones.
 #
+# The four marked "harvested" are cut from the agent's OWN recorded voice by
+# tools/harvest_fillers.py, which is better than a fresh TTS render and not just
+# a workaround for the missing key: they are already at 8 kHz, already through
+# the phone codec, and already carry the line character of a real call. A
+# studio-clean render would audibly not match the sentence that follows it.
+#
+# The rest have no clip yet and are simply never played. A filler with no audio
+# is skipped, not faked.
+#
 # Every entry is a *continuation* -- it promises the sentence is coming. Words
 # that can stand as a complete reply are excluded on purpose: "సరే." alone
 # sounds like the agent finished talking, and the caller starts speaking into
@@ -69,14 +78,13 @@ CACHE_DIR = Path(__file__).parent / "models" / "filler_audio"
 # Kept short. This is audio the caller sits through on every gated turn, so a
 # long filler spends the very budget it was added to protect.
 FILLERS: tuple[str, ...] = (
-    "సరే అండి",        # "alright then"
-    "అలాగే",           # "very well"
-    "అర్థమైంది",        # "understood"
-    "ఒక్క నిమిషం",      # "one moment"
-    "సరే సార్",         # "alright sir"
-    "మంచిది",          # "good"
-    "ఆc",              # the Telugu backchannel grunt; the most natural of all
-    "చూద్దాం",          # "let's see"
+    "సరే",              # "alright"        <- harvested
+    "మంచిది",           # "good"           <- harvested
+    "అర్థమైంది",         # "understood"     <- harvested
+    "అవును",            # "yes"            <- harvested
+    "అలాగే",            # "very well"
+    "ఒక్క నిమిషం",       # "one moment"
+    "చూద్దాం",           # "let us see"
 )
 
 # Openers the model is told to use by the state block. If a filler has just
