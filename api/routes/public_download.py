@@ -42,6 +42,24 @@ def _is_externally_reachable(url: str) -> bool:
     return "." in host
 
 
+# A browser <audio> element refuses to play "application/octet-stream": the
+# dashboard's Run Preview player sat at 0:00 / 0:00 with a perfectly good WAV
+# behind it. The redirect path never had this problem because MinIO returns the
+# type it stored, so it only appeared once this route began serving bytes.
+_MEDIA_TYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".txt": "text/plain; charset=utf-8",
+    ".json": "application/json",
+}
+
+
+def _media_type_for(file_path: str) -> str:
+    return _MEDIA_TYPES.get(Path(file_path).suffix.lower(), "application/octet-stream")
+
+
 async def _stream_object(url: str, chunk_size: int = 64 * 1024):
     """Relay the object body without buffering the whole file in memory."""
     async with aiohttp.ClientSession() as session:
@@ -188,11 +206,14 @@ async def download_workflow_artifact(
     )
     return StreamingResponse(
         _stream_object(internal_url),
-        media_type="application/octet-stream",
+        media_type=_media_type_for(file_path),
         headers={
             "Content-Disposition": (
                 f'{"inline" if inline else "attachment"}; '
                 f'filename="{Path(file_path).name}"'
-            )
+            ),
+            # Lets the dashboard's audio element seek instead of only playing
+            # from the start.
+            "Accept-Ranges": "bytes",
         },
     )

@@ -46,3 +46,24 @@ def test_a_bare_hostname_is_treated_as_internal():
 def test_garbage_is_never_assumed_reachable(url):
     """Unparseable means we stream, which works, rather than redirect blindly."""
     assert not _is_externally_reachable(url)
+
+
+# --- the dashboard's audio player -------------------------------------------
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("recordings/96.wav", "audio/wav"),
+    ("recordings/96/user.wav", "audio/wav"),
+    ("transcripts/98.txt", "text/plain; charset=utf-8"),
+    ("something.mp3", "audio/mpeg"),
+    ("unknown.bin", "application/octet-stream"),
+])
+def test_media_type_is_correct_for_the_browser(path, expected):
+    """A browser <audio> element will not play application/octet-stream.
+
+    The Run Preview player showed 0:00 / 0:00 over a perfectly good WAV because
+    this route served everything as octet-stream.
+    """
+    from api.routes.public_download import _media_type_for
+
+    assert _media_type_for(path) == expected
