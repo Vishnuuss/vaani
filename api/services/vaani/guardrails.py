@@ -188,6 +188,17 @@ def blocking(report: "GuardrailReport") -> list["Violation"]:
     return [v for v in report.violations if v.rule in BLOCKING_RULES]
 
 
+# What the reference agent says instead of asking the identical question again:
+# "క్షమించండి సరిగ్గా వినిపించలేదు, మళ్ళీ చెప్తారా". Measured on
+# Downloads/AISORIGIN_VIDEO/apgovt.mpeg -- it never repeats a sentence, and when
+# it mishears it says so. Run 96 asked the same question four times word for
+# word and the caller answered "you told me nothing".
+REPAIR_LINE = (
+    "క్షమించండి, సరిగ్గా వినిపించలేదు. "
+    "కొంచెం నెమ్మదిగా మళ్ళీ చెప్తారా అండి?"
+)
+
+
 SAFE_FALLBACK = (
     "సార్, కరెక్ట్ ఫిగర్ ఇప్పుడే చెప్పలేను. "
     "మా టీమ్ నుంచి కచ్చితమైన డీటెయిల్ చెప్పిస్తాను, సరేనా?"

@@ -59,6 +59,10 @@ class CallState:
         if kind not in self.objections:
             self.objections.append(kind)
 
+    # What the caller said on the turn just gone, so the acknowledgement has
+    # something concrete to refer to instead of being generic.
+    last_user_text: str = ""
+
     def advance(self) -> None:
         """Move the phase forward based on what we actually know.
 
@@ -117,6 +121,24 @@ class CallState:
             nxt = self.still_need[0] if self.still_need else ""
             if nxt and self.questions.get(nxt):
                 lines.append(f'NEXT QUESTION TO ASK: "{self.questions[nxt]}"')
+                # The client's complaint, in one word: "no confirmations". The
+                # reference agent opens nearly every turn with a two-word
+                # acknowledgement -- "మంచిది", "సరేనండి", "చాలా సంతోషమండి" --
+                # before asking anything. Ours went straight to the next
+                # question and the caller said "you told me nothing".
+                #
+                # It lives here rather than in the prose layers because this
+                # block is the last thing the model reads, and the same
+                # instruction has been in Layer 2 all along without being obeyed.
+                # Capped at two words on purpose: a long acknowledgement is
+                # audio the caller waits through on every single turn.
+                if self.last_user_text:
+                    lines.append(
+                        f'THEY JUST SAID: "{self.last_user_text[:80]}"  -- '
+                        "open with a TWO-WORD acknowledgement of it "
+                        "(మంచిది / సరేనండి / అర్థమైంది), then ask the question. "
+                        "Never more than two words."
+                    )
         if self.objections:
             lines.append(f"OBJECTIONS_RAISED: {self.objections}")
         if self.disqualified and not self.must_end:

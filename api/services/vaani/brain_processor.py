@@ -25,6 +25,9 @@ ReplyFilter    sanitises the reply before a character reaches the speech engine.
 
 from __future__ import annotations
 
+import re
+from difflib import SequenceMatcher
+
 from loguru import logger
 
 from pipecat.frames.frames import (
@@ -39,6 +42,18 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from api.services.vaani import guardrails, triage
 from api.services.vaani.compiler import MODE_PROTOCOL, Brief
 from api.services.vaani.reply_sanitizer import ReplySanitizer
+
+# Long enough that two genuinely different questions do not collide, short
+# enough that a repeat is caught before much of it has been spoken.
+_REPEAT_PREFIX = 25
+# Tolerates rewording ("సుమారు" inserted mid-question) without merging two
+# genuinely different questions, which share far less than this.
+_REPEAT_SIMILARITY = 0.80
+
+
+def _normalise(text: str) -> str:
+    """Punctuation and spacing are not what makes two replies different."""
+    return re.sub(r"[^\wఀ-౿]+", "", (text or "").lower())
 from api.services.vaani.state import CallState
 
 
@@ -78,6 +93,8 @@ class StateInjector(FrameProcessor):
         if not (text or "").strip():
             return
         result = triage.apply(self.state, text)
+        # Give the state block something concrete to acknowledge.
+        self.state.last_user_text = text.strip()
         self.state.advance()
         if result.any:
             logger.info(f"triage: {result}")
@@ -134,6 +151,19 @@ class ReplyFilter(FrameProcessor):
         """
         if self._blocked:
             return ""
+
+        # Repeating a sentence is the defect the client named first. Caught on
+        # the opening of the reply so the caller hears the repair line rather
+        # than most of the question they already heard.
+        provisional = self._spoken + candidate
+        if len(provisional) >= _REPEAT_PREFIX and self._is_repeat(provisional):
+            self._blocked = True
+            logger.warning(
+                f"[repeat] already said this; substituting the repair line: "
+                f"{provisional[:60]!r}"
+            )
+            return guardrails.REPAIR_LINE if not self._spoken else ""
+
         closing = bool(self._injector) and guardrails.must_close(
             self._injector.state)
         report = guardrails.check(self._spoken + candidate, closing=closing)
@@ -148,6 +178,29 @@ class ReplyFilter(FrameProcessor):
         # be something that reads as a continuation of it.
         return guardrails.SAFE_CLOSE if closing else guardrails.SAFE_FALLBACK
 
+    def _is_repeat(self, text: str) -> bool:
+        """Has this call already said something this close to it?
+
+        Similarity rather than equality, because the model rewords while asking
+        the same thing. Run 96 said both
+        "మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?" and
+        "మీ నెలవారీ బిల్లు సుమారు ఎంత రూపాయలుగా వస్తుంది?" in one call; an exact
+        or prefix test calls those different, and the caller does not.
+
+        Each previous reply is truncated to the length seen so far, so a partial
+        is compared against the equivalent part of what was already spoken.
+        """
+        head = _normalise(text)
+        if len(head) < _REPEAT_PREFIX:
+            return False
+        for prev in self._said:
+            other = _normalise(prev)[: len(head)]
+            if not other:
+                continue
+            if SequenceMatcher(None, head, other).ratio() >= _REPEAT_SIMILARITY:
+                return True
+        return False
+
     def _note_mode(self) -> None:
         """`MODE: END` is how the agent hangs up. Text chat has nothing to hang up."""
         if self._injector and self._sanitizer.mode == "END":
@@ -158,6 +211,8 @@ class ReplyFilter(FrameProcessor):
 
         if isinstance(frame, LLMFullResponseStartFrame):
             # One sanitizer per response; it carries per-reply truncation state.
+            if self._spoken.strip():
+                self._said.append(self._spoken)
             self._sanitizer = ReplySanitizer()
             self._spoken = ""
             self._blocked = False

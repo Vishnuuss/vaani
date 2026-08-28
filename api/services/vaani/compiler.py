@@ -152,6 +152,18 @@ def _business_layer(brief: Brief) -> str:
         # (save_with_any)". The extractor gets its keys from the brief directly;
         # they never belong in something the agent can say.
         lines += [f"- {q}" for q in brief.question_texts]
+        # The reference agent never asks an open question when the answer is a
+        # category -- it names the choices: "ఇల్లా లేకా ఆఫీసా",
+        # "కాంక్రీట్ రూఫా లేకా మెటల్ షీటా", "ఉదయం, మధ్యాహ్నం, లేదా సాయంత్రం".
+        # A caller who is told the options answers in one word; a caller who is
+        # not has to invent the format, and then gets asked again.
+        lines += [
+            "",
+            "When the answer is one of a few known kinds -- property type, roof "
+            "type, a time of day -- SAY THE CHOICES in the question itself. "
+            "Two or three, joined with లేదా. Never ask a bare open question for "
+            "something that has a small fixed set of answers.",
+        ]
     if brief.objection_playbook:
         lines += ["", "## Objections specific to this industry",
                   "The general playbook in Layer 2 still applies. These are the "

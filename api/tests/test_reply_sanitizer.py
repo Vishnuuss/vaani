@@ -170,6 +170,7 @@ def _filter(**state):
     f._sanitizer = ReplySanitizer()
     f._spoken = ""
     f._blocked = False
+    f._said = []
     return f
 
 
@@ -219,3 +220,62 @@ def test_the_end_of_response_tail_cannot_bypass_the_gate():
     f = _filter()
     f._gate("ఇది 45000 రూపాయలు")          # trips the price rule, blocks
     assert f._gate("all is ending: q") == ""
+
+
+# --- never say the same sentence twice ---------------------------------------
+
+
+def _filter_with_history(said):
+    from api.services.vaani.brain_processor import ReplyFilter
+
+    f = ReplyFilter.__new__(ReplyFilter)
+    f._injector = None
+    f._sanitizer = ReplySanitizer()
+    f._spoken = ""
+    f._blocked = False
+    f._said = list(said)
+    return f
+
+
+ASKED_ONCE = "సార్, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"
+
+
+def test_asking_the_same_question_again_becomes_a_repair_line():
+    """Run 96 asked this four times word for word.
+
+    The caller's verdict on that call was "you told me nothing". The reference
+    agent never repeats -- it says it could not hear.
+    """
+    from api.services.vaani import guardrails
+
+    f = _filter_with_history([ASKED_ONCE])
+    assert f._gate(ASKED_ONCE) == guardrails.REPAIR_LINE
+
+
+def test_a_reworded_repeat_is_still_a_repeat():
+    """Run 96 varied the tail while asking the same thing."""
+    from api.services.vaani import guardrails
+
+    f = _filter_with_history([ASKED_ONCE])
+    reworded = "సార్, మీ నెలవారీ బిల్లు సుమారు ఎంత రూపాయలుగా వస్తుంది?"
+    assert f._gate(reworded) == guardrails.REPAIR_LINE
+
+
+def test_a_genuinely_different_question_is_untouched():
+    f = _filter_with_history([ASKED_ONCE])
+    other = "సార్, మీరు ఏ నగరంలో ఉంటారు?"
+    assert f._gate(other) == other
+
+
+def test_a_short_acknowledgement_may_recur():
+    """"సరే" is not a repeated sentence; it is normal speech."""
+    f = _filter_with_history(["సరే."])
+    assert f._gate("సరే.") == "సరే."
+
+
+def test_nothing_follows_the_repair_line():
+    from api.services.vaani import guardrails
+
+    f = _filter_with_history([ASKED_ONCE])
+    assert f._gate(ASKED_ONCE) == guardrails.REPAIR_LINE
+    assert f._gate(" ఇంకా ఏదైనా?") == ""
