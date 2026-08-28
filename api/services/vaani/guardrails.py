@@ -112,8 +112,20 @@ class GuardrailReport:
                 + " ".join(v.correction for v in self.violations))
 
 
+_NUMBER_WORD = re.compile(
+    r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand|lakh|"
+    r"ఒక|రెండు|మూడు|నాలుగు|ఐదు|వంద|వేలు|వెయ్యి|లక్ష)", re.IGNORECASE)
+
+
+def _echoes_a_number(reply: str, caller_said: str) -> bool:
+    """Does the reply only contain numbers the CALLER already said?"""
+    mine = {m.group(0).lower() for m in _NUMBER_WORD.finditer(reply)}
+    theirs = {m.group(0).lower() for m in _NUMBER_WORD.finditer(caller_said)}
+    return bool(mine) and mine <= theirs
+
+
 def check(reply: str, *, allow_price: bool = False,
-          closing: bool = False) -> GuardrailReport:
+          closing: bool = False, caller_said: str = "") -> GuardrailReport:
     """Inspect a drafted reply. Fast, deterministic, no model call.
 
     `closing` comes from `must_close(state)`. When it is set, the call is over
@@ -160,7 +172,13 @@ def check(reply: str, *, allow_price: bool = False,
                         "short sentences, then stop."),
         ))
 
-    if not allow_price and (_PRICE.search(text) or _PRICE_WORDS.search(text)):
+    # Repeating the caller's OWN figure back is acknowledgement, not a quote.
+    # A live reply was cut in half for saying "రెండు thousand rupees" -- the
+    # bill the caller had just stated. The rule exists to stop the agent
+    # INVENTING a price, and echoing their number invents nothing.
+    echoing_them = bool(caller_said) and _echoes_a_number(text, caller_said)
+    if not allow_price and not echoing_them and (
+            _PRICE.search(text) or _PRICE_WORDS.search(text)):
         report.violations.append(Violation(
             rule="no_price_quote",
             evidence=(_PRICE.search(text) or _PRICE_WORDS.search(text)).group(0),

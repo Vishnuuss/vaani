@@ -198,16 +198,32 @@ class ReplyFilter(FrameProcessor):
 
         closing = bool(self._injector) and guardrails.must_close(
             self._injector.state)
-        report = guardrails.check(self._spoken + candidate, closing=closing)
+        report = guardrails.check(
+            self._spoken + candidate, closing=closing,
+            caller_said=(self._injector.state.last_user_text
+                         if self._injector else ""))
         hits = guardrails.blocking(report)
         if not hits:
             return candidate
 
-        self._blocked = True
         rules = ", ".join(f"{v.rule}({v.evidence})" for v in hits)
+
+        # Substituting only works while NOTHING has been spoken. Once audio is
+        # out, swapping the text in produces a splice, and the caller hears the
+        # join: a live reply came out as
+        #   "సరే, రెండు thousand rupeeసార్, కరెక్ట్ ఫిగర్ ఇప్పుడే చెప్పలేను."
+        # -- the safe line grafted onto the middle of a word. That is worse than
+        # the sentence it was replacing, and it is the same lesson the repeat
+        # guard already taught.
+        if self._spoken:
+            logger.warning(
+                f"[guardrail] {rules} -- already speaking, letting it finish "
+                f"rather than splicing"
+            )
+            return candidate
+
+        self._blocked = True
         logger.warning(f"[guardrail] reply replaced before TTS: {rules}")
-        # Nothing already spoken can be taken back, so the substitution has to
-        # be something that reads as a continuation of it.
         return guardrails.SAFE_CLOSE if closing else guardrails.SAFE_FALLBACK
 
     def _is_repeat(self, text: str) -> bool:

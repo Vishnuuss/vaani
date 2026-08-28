@@ -155,6 +155,7 @@ class _FakeState:
         self.disqualified = kw.get("disqualified", False)
         self.next_step_agreed = kw.get("next_step_agreed", False)
         self.no_more_questions = kw.get("no_more_questions", False)
+        self.last_user_text = kw.get("last_user_text", "")
 
 
 class _FakeInjector:
@@ -378,3 +379,33 @@ def test_the_state_block_demands_an_answer_before_the_next_question():
 def test_no_such_demand_when_they_simply_answered():
     st = _state(last_user_text="రెండు వేలు వస్తుంది")
     assert "THEY ASKED SOMETHING" not in st.render()
+
+
+# --- the guardrail must not splice into speech already going out -------------
+
+
+def test_echoing_the_callers_own_figure_is_not_a_price_quote():
+    """A live reply was cut in half for repeating the caller's own bill.
+
+    It came out as "సరే, రెండు thousand rupeeసార్, కరెక్ట్ ఫిగర్ ఇప్పుడే
+    చెప్పలేను." -- the safe line grafted onto the middle of a word. The rule
+    exists to stop the agent INVENTING a price; echoing theirs invents nothing.
+    """
+    f = _filter(last_user_text="రెండు వేలు వస్తుంది two thousand")
+    text = "సరే, రెండు thousand rupees కదా."
+    assert f._gate(text) == text
+
+
+def test_an_invented_figure_is_still_caught():
+    from api.services.vaani import guardrails
+
+    f = _filter(last_user_text="సరే")          # they never said a number
+    assert f._gate("ఇది 45000 రూపాయలు అవుతుంది") == guardrails.SAFE_FALLBACK
+
+
+def test_a_violation_mid_speech_is_logged_but_never_spliced():
+    """Once audio is out, the caller would hear the join."""
+    f = _filter()
+    f._spoken = "సరే, మీ బిల్లు "
+    tail = "45000 రూపాయలు అవుతుంది"
+    assert f._gate(tail) == tail
