@@ -141,3 +141,57 @@ def test_the_stored_value_is_an_iso_timestamp():
 def test_offers_are_stable_across_a_call():
     """Re-offering different times mid-call is how a caller loses confidence."""
     assert offer_slots(NOW) == offer_slots(NOW + timedelta(seconds=30))
+
+
+# --- two customers must never get the same slot ------------------------------
+#
+# Offering an appointment that is already promised is the worst outcome this
+# module can produce: both customers are told a vendor is coming, both wait in,
+# and one is stood up. That costs the client the customer, not just the visit.
+
+
+def test_a_booked_slot_is_never_offered_again():
+    first, second = offer_slots(NOW)
+    a, b = offer_slots(NOW, taken=[first.iso])
+    assert first.when not in (a.when, b.when)
+
+
+def test_offers_keep_coming_as_slots_fill_up():
+    taken, seen = [], set()
+    for _ in range(6):
+        a, b = offer_slots(NOW, taken=taken)
+        assert a.when not in seen and b.when not in seen
+        seen.update({a.when, b.when})
+        taken += [a.iso, b.iso]
+    assert len(seen) == 12, "each round must produce two genuinely new slots"
+
+
+def test_the_two_offers_differ_in_both_day_and_hour():
+    """"రేపు ఉదయం ten" against "ఎల్లుండి ఉదయం ten" is one mishearing apart."""
+    for taken in ([], [offer_slots(NOW)[0].iso]):
+        a, b = offer_slots(NOW, taken=taken)
+        assert a.when.date() != b.when.date()
+        assert a.when.hour != b.when.hour
+
+
+def test_taken_slots_are_accepted_as_iso_strings_or_datetimes():
+    """The stored value is ISO; a caller passing datetimes must work too."""
+    first, _ = offer_slots(NOW)
+    by_iso = offer_slots(NOW, taken=[first.iso])
+    by_dt = offer_slots(NOW, taken=[first.when])
+    assert [s.when for s in by_iso] == [s.when for s in by_dt]
+
+
+def test_unparseable_entries_do_not_block_booking():
+    """A malformed record must not stop the agent offering anything at all."""
+    a, b = offer_slots(NOW, taken=["not a date", None, ""])
+    assert a.when > NOW and b.when > NOW
+
+
+def test_a_full_diary_still_offers_something():
+    """A human can move a booking; the agent cannot improvise from nothing."""
+    taken = []
+    for _ in range(40):
+        taken += [s.iso for s in offer_slots(NOW, taken=taken)]
+    a, b = offer_slots(NOW, taken=taken)
+    assert a.when > NOW and b.when > NOW

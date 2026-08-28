@@ -111,6 +111,22 @@ def strip_leading_ack(text: str) -> str:
     return stripped if stripped.strip() else (text or "")
 
 
+# Clips cut from the agent's own recordings are stored under this name instead
+# of a voice id, and are used whatever voice is configured.
+#
+# That is not a shortcut. A harvested clip IS the live voice -- it was recorded
+# off a real call by this agent -- so keying it to a provider's voice id would
+# be recording a fact that is already true in a form that can go stale. It also
+# survives the provider being wrong: this pipeline was believed to run Sarvam
+# "anushka" and actually runs Cartesia sonic-3.5, which would have keyed every
+# clip to a voice that never appears at runtime and left fillers silently off.
+#
+# The consequence, stated so it is not forgotten: CHANGING THE AGENT'S VOICE
+# REQUIRES RE-HARVESTING. Run tools/harvest_fillers.py against a call made with
+# the new voice, or the caller hears the old one.
+HARVESTED = "harvested"
+
+
 def cache_path(text: str, voice: str, sample_rate: int) -> Path:
     """Where one rendered filler lives.
 
@@ -122,13 +138,17 @@ def cache_path(text: str, voice: str, sample_rate: int) -> Path:
 
 
 def load_cached(text: str, voice: str, sample_rate: int) -> bytes | None:
-    p = cache_path(text, voice, sample_rate)
-    try:
-        data = p.read_bytes()
-    except OSError:
+    """A clip for this filler: the agent's own harvested voice first."""
+    for key in (HARVESTED, voice):
+        try:
+            data = cache_path(text, key, sample_rate).read_bytes()
+        except OSError:
+            continue
+        if len(data) >= int(0.04 * sample_rate) * 2:
+            return data
         return None
-    # A truncated clip is a click in the caller's ear. 40ms minimum.
-    return data if len(data) >= int(0.04 * sample_rate) * 2 else None
+    return None
+
 
 
 def store_cached(text: str, voice: str, sample_rate: int, pcm: bytes) -> None:

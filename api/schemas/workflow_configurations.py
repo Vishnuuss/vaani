@@ -78,10 +78,34 @@ DEFAULT_LLM_HEDGE = 3
 # caught anything. Spending the p99 on every turn to protect a case that
 # degrades gracefully is the wrong way round.
 #
-# 0.6s sits above Sarvam's measured p50 flush-to-final (438ms, bench/FINDINGS
-# §5), so most finals still arrive in time; the rest fall back to the newest
-# partial, which for a two-word answer is usually the whole answer.
-DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.6
+# 0.45s, lowered from 0.6s on 2026-08-28. This budget IS the slow path.
+#
+# Run 262's endpoint times are bimodal: 0.403s on the turns where the Telugu
+# detector fired, and 0.78-0.93s clustered on the turns where it did not. That
+# second cluster is 0.2s of VAD plus this budget, almost exactly -- so on the
+# ~62% of turns the detector is unsure about, the caller waits out this constant
+# and nothing else.
+#
+# Lowering it was chosen only after the alternatives were measured and rejected.
+# `tools/sweep_turn_lead.py` retrained the detector to commit 0.1s, 0.2s and
+# 0.3s earlier, which is what lowering `smart_turn_stop_secs` would also amount
+# to. Recall collapsed faster than the time saved every time:
+#
+#     decide now       33.2% of turns end early    mean endpoint 0.718s
+#     0.10s earlier    21.1%                       0.753s
+#     0.20s earlier     5.5%                       0.837s
+#
+# Deciding sooner makes the call SLOWER on average. The budget is the only term
+# left that can be cut without asking the model to judge on less evidence.
+#
+# 0.45s and not lower: Sarvam's measured p50 flush-to-final is 438ms
+# (bench/FINDINGS §5), so this still catches about half the finals outright.
+# The rest fall back to the newest partial, which `PartialResponder` already
+# promotes -- and for the two-word answers these callers give, the newest
+# partial is usually the entire answer. Going below the p50 would trade
+# transcript accuracy for milliseconds, which is the wrong trade for a client
+# who is complaining about quality.
+DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.45
 
 
 class ExternalPBXFieldMapping(BaseModel):

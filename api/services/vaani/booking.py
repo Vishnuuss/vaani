@@ -34,6 +34,7 @@ a closed choice -- "ఉదయం, మధ్యాహ్నం, లేదా స�
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -44,6 +45,14 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # daylight. Offers are clamped into this window.
 FIRST_HOUR = 9
 LAST_HOUR = 18
+
+# The hours actually offered. Not every legal hour: a short, fixed menu keeps
+# the two offers far apart and easy to distinguish over a phone line.
+OFFER_HOURS = (10, 16)
+
+# How far ahead to keep searching when slots are taken. Past this the lead has
+# gone cold anyway, and a human should be rescheduling rather than the agent.
+MAX_DAYS_AHEAD = 14
 
 DAY_WORDS = {
     "today": 0, "ఈ రోజు": 0, "ఈరోజు": 0, "ఇవాళ": 0, "ఇయ్యాల": 0, "आज": 0,
@@ -106,6 +115,16 @@ class Slot:
         return f"{day} {part} {names.get(hour12, str(hour12))} oclock"
 
 
+def _as_dt(value) -> datetime | None:
+    """Accept either an ISO string or a datetime; anything else is not a slot."""
+    if isinstance(value, datetime):
+        return value.astimezone(IST)
+    try:
+        return datetime.fromisoformat(str(value)).astimezone(IST)
+    except (TypeError, ValueError):
+        return None
+
+
 def _clamp(when: datetime) -> datetime:
     """Push a time into daylight business hours, moving to the next day if needed."""
     when = when.replace(minute=0, second=0, microsecond=0)
@@ -116,17 +135,71 @@ def _clamp(when: datetime) -> datetime:
     return when
 
 
-def offer_slots(now: datetime | None = None) -> tuple[Slot, Slot]:
-    """Two concrete, distinguishable options.
+def offer_slots(now: datetime | None = None,
+                taken: Iterable[str | datetime] = ()) -> tuple[Slot, Slot]:
+    """Two concrete, distinguishable options that are not already booked.
 
     Deliberately on DIFFERENT days as well as different times. Two slots on one
     day are easy to confuse on a noisy phone line, and a confused caller is the
     booking that goes wrong.
+
+    `taken` is every appointment already promised to somebody else. Offering one
+    of those is the worst failure this module can produce: two customers are
+    each told a vendor is coming, both wait in, and one of them is stood up. It
+    costs the client the customer, not just the visit.
+
+    The search walks forward day by day rather than shuffling times within a
+    day, so the two offers stay far apart and stay easy to tell apart on a bad
+    line even after several slots are gone.
     """
     now = (now or datetime.now(IST)).astimezone(IST)
-    first = _clamp(now.replace(hour=10) + timedelta(days=1))
-    second = _clamp(now.replace(hour=16) + timedelta(days=2))
-    return Slot(first), Slot(second)
+    busy = {_as_dt(t) for t in taken}
+    busy.discard(None)
+
+    free = [
+        when
+        for day in range(1, MAX_DAYS_AHEAD + 1)
+        for hour in OFFER_HOURS
+        if (when := _clamp((now + timedelta(days=day)).replace(hour=hour))) > now
+        and when not in busy
+    ]
+    free.sort()
+
+    chosen: list[datetime] = []
+    if free:
+        chosen.append(free[0])
+        # The second offer must differ in BOTH the day and the hour. Two slots
+        # that differ only by the day word -- "రేపు ఉదయం ten" against "ఎల్లుండి
+        # ఉదయం ten" -- are one mishearing apart on a phone line, and a misheard
+        # slot is a vendor at the door on the wrong morning.
+        for when in free[1:]:
+            if when.date() != chosen[0].date() and when.hour != chosen[0].hour:
+                chosen.append(when)
+                break
+        else:
+            # Nothing differs on both axes; a different day alone still beats
+            # offering the same slot twice.
+            for when in free[1:]:
+                if when.date() != chosen[0].date():
+                    chosen.append(when)
+                    break
+    if len(chosen) == 2:
+        return Slot(chosen[0]), Slot(chosen[1])
+
+    # Everything inside the horizon is spoken for. Offer the far end rather than
+    # returning nothing: a human can move a booking, but the agent cannot
+    # improvise a time if it is handed none.
+    fallback = _clamp((now + timedelta(days=MAX_DAYS_AHEAD)).replace(hour=OFFER_HOURS[0]))
+    while len(chosen) < 2:
+        chosen.append(fallback)
+        fallback = _clamp(fallback + timedelta(days=1))
+    return Slot(chosen[0]), Slot(chosen[1])
+
+
+def is_taken(when: datetime, taken: Iterable[str | datetime]) -> bool:
+    """Whether that exact slot is already promised to somebody else."""
+    target = _as_dt(when)
+    return any(_as_dt(t) == target for t in taken)
 
 
 def parse_slot(text: str, now: datetime | None = None) -> datetime | None:

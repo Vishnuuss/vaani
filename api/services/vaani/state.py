@@ -147,6 +147,12 @@ class CallState:
         when = booking.parse_slot(text)
         if when is None:
             return False
+        if booking.is_taken(when, self.taken_slots):
+            # Somebody else already has it. Saying yes would stand one of them
+            # up, so treat it as "not chosen" -- the caller is asked again, and
+            # the offers no longer include it.
+            self.offered = ()
+            return False
         self.appointment_iso = when.isoformat()
         return True
 
@@ -190,6 +196,10 @@ class CallState:
     # The two slots offered, held so a later "the first one" can be resolved
     # and so the agent never quietly re-offers different times mid-call.
     offered: tuple = ()
+    # Appointments already promised to other callers, so two customers are never
+    # given the same slot. Populated at call start; empty means "unknown", which
+    # degrades to today's behaviour rather than blocking a booking.
+    taken_slots: list = field(default_factory=list)
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -290,7 +300,7 @@ class CallState:
                 # and no time -- so the vendor had nothing to act on and the
                 # caller had been told a time that existed only in a transcript.
                 if not self.offered:
-                    self.offered = booking.offer_slots()
+                    self.offered = booking.offer_slots(taken=self.taken_slots)
                 first, second = self.offered
                 lines.append(
                     f'OFFER EXACTLY THESE TWO TIMES, both of them, in these '
