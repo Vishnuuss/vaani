@@ -278,3 +278,51 @@ def test_only_the_recent_questions_are_listed():
     block = st.render()
     assert "question number 9" in block
     assert "question number 0" not in block
+
+
+# --- the repeat is caught before anything is spoken, never after -------------
+
+
+def _filter_said(said):
+    from api.services.vaani.brain_processor import ReplyFilter
+
+    f = ReplyFilter.__new__(ReplyFilter)
+    f._injector = None
+    f._sanitizer = ReplySanitizer()
+    f._spoken = ""
+    f._blocked = False
+    f._said = list(said)
+    return f
+
+
+ASKED = "సార్, మీ నెలవారీ బిల్లు ఎంత రూపాయలుగా వస్తుంది?"
+
+
+def test_a_repeat_is_replaced_whole_not_truncated():
+    from api.services.vaani import guardrails
+
+    f = _filter_said([ASKED])
+    assert f._gate(ASKED) == guardrails.REPAIR_LINE
+
+
+def test_a_reworded_repeat_is_still_caught():
+    """Run 96 inserted "సుమారు" and asked the same thing again."""
+    from api.services.vaani import guardrails
+
+    f = _filter_said([ASKED])
+    assert f._gate("సార్, మీ నెలవారీ బిల్లు సుమారు ఎంత రూపాయలుగా వస్తుంది?") == (
+        guardrails.REPAIR_LINE)
+
+
+def test_a_repeat_is_never_caught_once_speaking_has_started():
+    """This is the truncation bug. Once audio is out, nothing may be retracted."""
+    f = _filter_said([ASKED])
+    f._spoken = "సార్, మీ నెలవారీ బిల్లు "     # already spoken
+    tail = "ఎంత రూపాయలుగా వస్తుంది?"
+    assert f._gate(tail) == tail
+
+
+def test_the_acknowledgement_opening_is_not_itself_a_repeat():
+    f = _filter_said(["అర్థమైంది సార్, మీ నెలవారీ బిల్లు ఎంత?"])
+    other = "అర్థమైంది సార్, మీరు ఏ నగరంలో ఉంటారు?"
+    assert f._gate(other) == other

@@ -171,17 +171,30 @@ class ReplyFilter(FrameProcessor):
         if self._blocked:
             return ""
 
-        # Repetition is NOT policed here. Blocking a reply that has already
-        # started streaming truncates it, and the eval caught exactly that:
-        # "అర్థమైంది బిల్లు?" and "అర్థమైంది, మీరు ఇల్లు, అపార" reached callers
-        # as cut-off fragments. A truncated sentence is worse than the repeat it
-        # was preventing.
+        # Repetition is decided ONCE, on the first chunk, before a single word
+        # has been spoken -- and never after.
         #
-        # It is prevented at the source instead -- the state block lists what has
-        # already been asked and tells the model to say it could not hear rather
-        # than ask again. That is the same mechanism that made the
-        # acknowledgement stick after prose alone had failed for weeks, and it
-        # cannot cut a sentence in half.
+        # The earlier version checked on every chunk, so it could fire once the
+        # reply was already streaming, and then all it could do was stop. The
+        # eval caught the result: callers heard "అర్థమైంది బిల్లు?" and
+        # "అర్థమైంది, మీరు ఇల్లు, అపార". Half a sentence is worse than the
+        # repeat it was preventing.
+        #
+        # Nothing has been emitted while `self._spoken` is empty, so replacing
+        # the reply here is a substitution rather than a truncation. The
+        # sanitizer holds back 24 characters before releasing anything, which is
+        # what makes that window exist at all.
+        #
+        # Telling the model not to repeat itself, via the state block, is kept
+        # as well -- but it is not sufficient on its own. Two runs of the
+        # battery repeated anyway.
+        if not self._spoken and self._is_repeat(candidate):
+            self._blocked = True
+            logger.warning(
+                f"[repeat] already asked this; saying it could not hear "
+                f"instead: {candidate[:60]!r}"
+            )
+            return guardrails.REPAIR_LINE
 
         closing = bool(self._injector) and guardrails.must_close(
             self._injector.state)
