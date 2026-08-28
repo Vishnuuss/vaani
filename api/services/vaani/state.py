@@ -68,9 +68,37 @@ class CallState:
     must_end: bool = False           # removal requested, hostile, or fraud accusation
     end_reason: str = ""
 
+    # A field asked this many times is abandoned, answered or not.
+    #
+    # Run 218: the caller gave his bill on turn 2 ("టెన్ టు ట్వంటీ లాక్స్") and
+    # was asked for it again on turns 3, 15 and 17, because extraction lands a
+    # turn late and STILL_NEED had not caught up. He replied
+    # "చెప్పాను కదా అప్పుడే" (I already told you), then
+    # "ఎన్ని సార్లు అడుగుతారు?" (how many times are you going to ask?), then
+    # "మీరు చాలా ఇన్‌కన్సిస్టెంట్ గా", and ended the call.
+    #
+    # Rewording is why the repeat guard missed it -- "బిల్లు ఎంత?" and
+    # "బిల్లు సుమారు ఎంత?" are different sentences asking the identical thing.
+    # Counting the FIELD instead of comparing the words does not care how it is
+    # phrased. Two attempts is the whole budget: one ask, one clarification.
+    MAX_ASKS_PER_FIELD = 2
+
     @property
     def still_need(self) -> list[str]:
-        return [f for f in self.required_fields if f not in self.known]
+        return [f for f in self.required_fields
+                if f not in self.known
+                and self.ask_counts.get(f, 0) < self.MAX_ASKS_PER_FIELD]
+
+    @property
+    def abandoned(self) -> list[str]:
+        """Fields given up on. Better an unknown than a caller hanging up."""
+        return [f for f in self.required_fields
+                if f not in self.known
+                and self.ask_counts.get(f, 0) >= self.MAX_ASKS_PER_FIELD]
+
+    def note_asked(self, field_name: str) -> None:
+        if field_name:
+            self.ask_counts[field_name] = self.ask_counts.get(field_name, 0) + 1
 
     @property
     def elapsed_s(self) -> int:
@@ -87,6 +115,9 @@ class CallState:
     # What the caller said on the turn just gone, so the acknowledgement has
     # something concrete to refer to instead of being generic.
     last_user_text: str = ""
+    # How many times each field has been asked for, so a caller is never
+    # interrogated about the same thing a third time.
+    ask_counts: dict = field(default_factory=dict)
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -150,6 +181,7 @@ class CallState:
             nxt = self.still_need[0] if self.still_need else ""
             if nxt and self.questions.get(nxt):
                 lines.append(f'NEXT QUESTION TO ASK: "{self.questions[nxt]}"')
+                self.note_asked(nxt)
                 # The client's complaint, in one word: "no confirmations". The
                 # reference agent opens nearly every turn with a two-word
                 # acknowledgement -- "మంచిది", "సరేనండి", "చాలా సంతోషమండి" --

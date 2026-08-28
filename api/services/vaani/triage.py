@@ -23,6 +23,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from loguru import logger
+
 # --- remove me / stop calling ------------------------------------------------
 REMOVAL = re.compile(
     r"(లిస్ట్\s*(నుంచి|నుండి)?\s*తీసే|నంబర్\s*తీసే|కాల్\s*చేయ(కండి|వద్దు|కు)"
@@ -52,6 +54,21 @@ ALREADY_HAS = re.compile(
     r"|पहले\s*से.{0,20}(सोलर|लगा)"
     r"|already\s+(have|got|installed)\s+(solar|panels))",
     re.IGNORECASE)
+
+# --- "I already told you" ----------------------------------------------------
+# The caller saying they have already answered is the clearest possible signal
+# that the checklist is wrong, and it should be believed instantly rather than
+# after the extractor catches up. Run 218: "చెప్పాను కదా అప్పుడే",
+# "అదే 10 టు 20 లాక్స్ చెప్పాను కదా", then "ఎన్ని సార్లు అడుగుతారు?" and the
+# call ended. Asking a third time after this is not persistence, it is not
+# listening.
+ALREADY_ANSWERED = re.compile(
+    r"(చెప్పాను\s*కదా|చెప్పాన్నే|అప్పుడే\s*చెప్ప|ఇంతకుముందే\s*చెప్ప|"
+    r"మళ్ళీ\s*ఎందుకు|ఎన్ని\s*సార్లు\s*అడు|అదే\s*చెప్|చెప్తున్నా\s*కదా"
+    r"|पहले\s*ही\s*बता|कितनी\s*बार"
+    r"|already\s+(told|said|answered)|i\s+said\s+that|how\s+many\s+times)",
+    re.IGNORECASE)
+
 
 # --- a child answered --------------------------------------------------------
 CHILD = re.compile(
@@ -115,6 +132,7 @@ class Triage:
     buying_signal: bool = False
     next_step_agreed: bool = False
     no_more_questions: bool = False
+    already_answered: bool = False
 
     @property
     def any(self) -> bool:
@@ -152,6 +170,7 @@ def triage(text: str) -> Triage:
         next_step_agreed=bool(AGREED.search(t)),
         buying_signal=bool(BUYING.search(t)),
         no_more_questions=bool(NO_MORE_QUESTIONS.search(t)),
+        already_answered=bool(ALREADY_ANSWERED.search(t)),
     )
 
 
@@ -183,6 +202,16 @@ def apply(state, text: str) -> Triage:
 
     # Latch, never un-set -- a caller who agreed to a visit has agreed, even if
     # they chat about something else on the next turn.
+    if result.already_answered:
+        # Believe them at once. The field they are being re-asked is the one
+        # currently at the head of the checklist, so exhausting its budget stops
+        # it being asked a third time -- which is what ended run 218.
+        pending = state.still_need
+        if pending:
+            state.ask_counts[pending[0]] = state.MAX_ASKS_PER_FIELD
+            logger.info(f"triage: caller says they already answered "
+                        f"{pending[0]!r}; moving on")
+
     if result.next_step_agreed:
         state.next_step_agreed = True
     if result.buying_signal:
