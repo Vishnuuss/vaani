@@ -42,12 +42,36 @@ _QUESTION_WORDS = re.compile(
 # Ends on the AA sign: the Telugu interrogative particle.
 _QUESTION_PARTICLE = re.compile(r"[ఀ-౿]ా\s*[?.!]?\s*$")
 
+# The particle also detaches into its own word, and then the sentence carries on
+# past it. Run 218 turn 18: "కాదు పాసిబుల్ అయి ఉంది యా బికాజ్ ఇట్స్ నాట్ ఏ స్మాల్
+# ప్లాట్ ఇట్స్ లైక్ బిగ్ వన్." -- a question about whether solar is possible at
+# all, ending in a full stop, with the interrogative sitting in the middle. Both
+# of the patterns above miss it, and the agent answered by asking his name.
+#
+# Only "యా". Bare "ఆ" is excluded deliberately: it is both the filler "ah" that
+# opens half this caller's turns and the demonstrative "that" -- "ఆ కంపెనీ మీద
+# పెట్టాలి" (install it on that company) is a statement, and reading it as a
+# question would suppress the checklist and stall the call outright.
+_QUESTION_CLITIC = re.compile(r"\S\s+యా(\s|[?.!,]|$)")
+
+# English asked inside a Telugu sentence, which is how this caller asks the
+# things he most wants answered. "possible" is the specific word run 218 turned
+# on and the reason it is here by name.
+_QUESTION_EN = re.compile(
+    r"(possible|available|worth it|how much|how many|what about|"
+    r"tell me|explain|any idea|will (it|you|i)|should i)", re.IGNORECASE)
+
 
 def _is_question(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    return bool(_QUESTION_WORDS.search(t)) or bool(_QUESTION_PARTICLE.search(t))
+    return bool(
+        _QUESTION_WORDS.search(t)
+        or _QUESTION_PARTICLE.search(t)
+        or _QUESTION_CLITIC.search(t)
+        or _QUESTION_EN.search(t)
+    )
 
 
 @dataclass
@@ -185,6 +209,32 @@ class CallState:
             lines.append("STILL_NEED: [] -- THE CALLER HAS ASKED YOU TO STOP "
                          "ASKING QUESTIONS. Ask nothing at all. Answer what "
                          "they raised, or offer a time. Nothing else.")
+        elif _is_question(self.last_user_text):
+            # THE CHECKLIST IS SUPPRESSED, and that is the entire point.
+            #
+            # Answering first was already instructed here, as a line sitting
+            # underneath STILL_NEED and NEXT QUESTION TO ASK. Run 218 shows what
+            # that is worth. Turn 18, the caller asks whether solar is even
+            # possible on a plot that size -- "ఇట్స్ నాట్ ఏ స్మాల్ ప్లాట్, ఇట్స్
+            # లైక్ బిగ్ వన్" -- and the agent replies "సారీ, మీ పేరు చెప్పగలరా?".
+            # By turn 36 he has spelled it out: "అతను సోలార్ పెట్టొచ్చా అని
+            # అడిగాను, మీరేమో పేరు అడుగుతున్నారు" -- I asked whether solar can be
+            # installed, and you are asking my name.
+            #
+            # The detector was not the failure. It fired on turns 10 and 13 and
+            # the agent asked its own question anyway, because three lines told
+            # it to ask and one told it to answer. This module's own docstring
+            # says why: listing STILL_NEED at the end of the context makes the
+            # model ask for those fields even when the prose forbids it. Prose
+            # does not beat the checklist. Removing the checklist does.
+            #
+            # One turn only. The fields are still needed and come back next turn.
+            lines.append(
+                "STILL_NEED: [] -- THE CALLER ASKED YOU SOMETHING. Answer THAT, "
+                "and nothing else. Ask NO question this turn, not even a short "
+                "one. Answer from your facts, or say the team will confirm the "
+                "exact figure. Never invent a number, price, location or brand.")
+            self.pending_ask = ""
         else:
             lines.append(f"STILL_NEED: {self.still_need or '[]'}")
             # Field KEYS are meaningless to the model -- it was being handed
@@ -213,11 +263,6 @@ class CallState:
                 if self.asked:
                     lines.append(f"ALREADY SAID: {self.asked[-1][:60]!r} "
                                  "-- do not repeat it; say you could not hear.")
-                if _is_question(self.last_user_text):
-                    lines.append(
-                        "THEY ASKED SOMETHING -- answer it first from your "
-                        "facts, or say the team will confirm. Never invent a "
-                        "number, price, location or brand.")
                 if self.last_user_text:
                     lines.append(
                         f"THEY SAID: {self.last_user_text[:60]!r} "
