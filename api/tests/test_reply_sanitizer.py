@@ -363,7 +363,12 @@ def test_the_state_block_demands_an_answer_before_the_next_question():
     st = _state(last_user_text="లోన్ దొరుకుతుందా")
     block = st.render()
     assert "THEY ASKED YOU A QUESTION" in block
-    assert "Answer it FIRST" in block
+    assert "Respond to it FIRST" in block
+    # Admitting ignorance must be offered as a complete answer, or the model
+    # skips the question instead -- which is what it did for "where is your
+    # company", after it stopped inventing "we are in Hyderabad".
+    assert "have the team confirm" in block
+    assert "NOT ALLOWED" in block
 
 
 def test_no_such_demand_when_they_simply_answered():
