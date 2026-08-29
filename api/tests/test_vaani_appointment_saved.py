@@ -70,3 +70,33 @@ async def test_an_engine_with_no_vaani_state_is_unaffected():
     engine = Engine({"assessment_agreed": True})
     gathered = await engine.get_gathered_context()
     assert gathered == {"assessment_agreed": True}
+
+
+# --- run 276: a fact the code was certain about was erased by a null ---------
+
+
+@pytest.mark.asyncio
+async def test_a_parsed_amount_is_not_erased_by_the_extractors_null():
+    """The caller said "ఒక లక్ష", the parser read 100000, the agent said it back
+    out loud -- and the saved record read `monthly_bill: null` because the
+    extraction LLM returned nothing and its nothing landed last."""
+    st = CallState()
+    st.known["monthly_bill"] = "100000"
+    engine = Engine({"monthly_bill": None, "location": "కొండపూర్"})
+    engine.attach_vaani_state(st)
+
+    gathered = await engine.get_gathered_context()
+    assert gathered["monthly_bill"] == "100000"
+    assert gathered["extracted_variables"]["monthly_bill"] == "100000"
+
+
+@pytest.mark.asyncio
+async def test_the_extractor_still_wins_when_it_actually_found_something():
+    """This is a floor for nulls, not an override of real extraction."""
+    st = CallState()
+    st.known["location"] = "Hyderabad"
+    engine = Engine({"location": "కొండపూర్"})
+    engine.attach_vaani_state(st)
+
+    gathered = await engine.get_gathered_context()
+    assert gathered["location"] == "కొండపూర్", "a real extraction must not be replaced"

@@ -1069,7 +1069,26 @@ class PipecatEngine:
     async def get_gathered_context(self) -> dict:
         """Get the gathered context including extracted variables."""
         gathered = self._gathered_context.copy()
-        booked = getattr(getattr(self, "_vaani_state", None), "appointment_iso", "")
+        state = getattr(self, "_vaani_state", None)
+
+        # Facts Vaani read deterministically win over the extractor's nulls.
+        #
+        # Run 276: the caller said "ఒక లక్ష", the parser recorded 100000, the
+        # agent reacted to it out loud -- and the saved record still read
+        # `monthly_bill: null`, because the extraction LLM returned nothing and
+        # its nothing landed last. A field the code is certain about must not be
+        # erased by a model that is not.
+        known = dict(getattr(state, "known", {}) or {})
+        if known:
+            merged = dict(gathered.get("extracted_variables") or {})
+            for field_name, value in known.items():
+                if value in (None, "") or gathered.get(field_name) not in (None, ""):
+                    continue
+                gathered[field_name] = value
+                merged[field_name] = value
+            gathered["extracted_variables"] = merged
+
+        booked = getattr(state, "appointment_iso", "")
         if booked:
             gathered["appointment_time"] = booked
             gathered["extracted_variables"] = {
