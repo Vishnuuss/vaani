@@ -221,6 +221,14 @@ class CallState:
         amount = amounts.parse_amount(text)
         if amount is None:
             return False
+        if not amount.plausible:
+            # Heard, but not believed. Run 286's caller said "60 క్రోర్స్" and
+            # was congratulated on it. Recording the figure would put a fiction
+            # in the lead record; ignoring it silently would ask the same
+            # question again. So it is neither: the state block asks him to
+            # confirm, once.
+            self.doubted = amount
+            return False
         self.known[self.still_need[0]] = str(amount.rupees)
         self.amount = amount
         return True
@@ -310,6 +318,8 @@ class CallState:
     # One reaction per call. Repeating "that is a big bill" every turn is the
     # opposite of sounding human.
     reacted: bool = False
+    # An amount that was said but is not credible as a monthly bill.
+    doubted: object = None
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -440,6 +450,17 @@ class CallState:
                 # three rules ran to 1,086 characters and took the LLM's first
                 # token from 0.22s to 0.655s -- total 1.27s to 2.10s on run 206.
                 # Same rules, said once.
+                # An impossible figure gets questioned, not celebrated.
+                if self.doubted is not None:
+                    said = getattr(self.doubted, "say", lambda: "")()
+                    self.doubted = None
+                    lines.append(
+                        f"THEY SAID THEIR BILL IS {said} -- that cannot be a "
+                        "monthly electricity bill. Say warmly that it sounds "
+                        "much larger than usual and ask them to confirm the "
+                        "monthly figure. Do NOT agree with it and do NOT "
+                        "praise it.")
+
                 # React to the SIZE of the bill, not just record it.
                 #
                 # A factory owner quoting 50 lakhs a month and a household

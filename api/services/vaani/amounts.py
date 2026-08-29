@@ -90,6 +90,11 @@ NUMERALS: dict[str, float] = {
     "ఆరు": 6, "ఏడు": 7, "ఎనిమిది": 8, "తొమ్మిది": 9, "పది": 10,
     "పదకొండు": 11, "పన్నెండు": 12, "పదిహేను": 15, "ఇరవై": 20, "ముప్పై": 30,
     "నలభై": 40, "యాభై": 50, "అరవై": 60, "డెబ్భై": 70, "సగం": 0.5,
+    # "వంద" is BOTH a numeral and a scale in Telugu -- "వంద కోట్లు" is a
+    # hundred crores, while "ఐదు వందల" is five hundred. It appears in both
+    # tables on purpose; the scale lookup runs first, so the multiplier reading
+    # wins where one applies and this reading covers the rest.
+    "వంద": 100, "హండ్రెడ్": 100, "hundred": 100,
 }
 
 # "టెన్ టు ట్వంటీ", "10 to 15", "పది నుంచి ఇరవై".
@@ -105,6 +110,21 @@ NOT_MONEY = re.compile(
     r"సంవత్సర|year|నెల\s*రోజు|శాతం|percent|%)", re.IGNORECASE)
 
 
+# What a monthly electricity bill can credibly be.
+#
+# Run 286: the caller said "60 క్రోర్స్" and the agent answered "60 కోట్లు బిల్లు
+# నిజంగా పెద్దది" -- gushing at six hundred million rupees a month. No such
+# electricity bill exists anywhere; the largest industrial consumers in India
+# are two orders below it. A salesperson who accepts that figure has stopped
+# listening, and the caller knows it.
+#
+# The ceiling is deliberately generous -- 5 crore a month is a very large
+# factory -- because rejecting a real large bill is worse than accepting a silly
+# one. The floor rules out a stray digit being read as a bill.
+MAX_PLAUSIBLE = 50_000_000
+MIN_PLAUSIBLE = 100
+
+
 @dataclass(frozen=True)
 class Amount:
     """A sum of money the caller named."""
@@ -112,6 +132,16 @@ class Amount:
     rupees: int
     low: int | None = None      # set when they gave a range
     high: int | None = None
+
+    @property
+    def plausible(self) -> bool:
+        """Could this really be somebody's monthly electricity bill?
+
+        An implausible figure is not discarded -- the caller did say it, and it
+        may be a mishearing worth checking. It is simply never recorded as fact
+        and never reacted to as though it were.
+        """
+        return MIN_PLAUSIBLE <= self.rupees <= MAX_PLAUSIBLE
 
     @property
     def is_range(self) -> bool:

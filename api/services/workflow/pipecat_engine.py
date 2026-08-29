@@ -1078,6 +1078,24 @@ class PipecatEngine:
         # `monthly_bill: null`, because the extraction LLM returned nothing and
         # its nothing landed last. A field the code is certain about must not be
         # erased by a model that is not.
+        # A figure the parser rejected must not survive in the record either.
+        #
+        # Run 286: the caller said "60 క్రోర్స్", the agent celebrated it, and the
+        # saved record read `monthly_bill: 60` -- the extraction LLM's own
+        # attempt at the same words. Three different numbers for one utterance,
+        # none of them a real bill. If Vaani has judged an amount implausible,
+        # the extractor's version of it is not more trustworthy.
+        doubted = getattr(state, "doubted", None)
+        if doubted is not None:
+            for f in list(gathered):
+                if "bill" in f.lower() or "amount" in f.lower():
+                    gathered[f] = None
+            ev = gathered.get("extracted_variables")
+            if isinstance(ev, dict):
+                for f in list(ev):
+                    if "bill" in f.lower() or "amount" in f.lower():
+                        ev[f] = None
+
         known = dict(getattr(state, "known", {}) or {})
         if known:
             merged = dict(gathered.get("extracted_variables") or {})

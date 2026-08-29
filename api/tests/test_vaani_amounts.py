@@ -110,3 +110,43 @@ def test_it_can_say_the_amount_back(rupees, expected):
     """The caller is the only one who can catch a misheard figure."""
     from api.services.vaani.amounts import Amount
     assert Amount(rupees=rupees).say() == expected
+
+
+# --- run 286: an impossible figure was celebrated -----------------------------
+#
+#   CALLER  60 క్రోర్స్ ఉంటాయి.
+#   AGENT   మంచిది సార్, 60 కోట్లు బిల్లు నిజంగా పెద్దది, ఇలాంటి బిల్లు ఉన్నప్పుడు
+#           సోలార్ పెట్టడం వేగంగా లాభం ఇస్తుంది.
+#
+# Six hundred million rupees a month. No such electricity bill exists. The agent
+# agreed with it enthusiastically, and the saved record then read
+# `monthly_bill: 60` -- three different numbers for one sentence, none of them
+# real. A salesperson who accepts that figure has stopped listening.
+
+
+@pytest.mark.parametrize("said,rupees", [
+    ("60 క్రోర్స్ ఉంటాయి.", 600_000_000),
+    ("వంద కోట్లు", 1_000_000_000),
+])
+def test_an_impossible_bill_is_heard_but_not_believed(said, rupees):
+    a = parse_amount(said)
+    assert a is not None, "it was said, so it must still be parsed"
+    assert a.rupees == rupees
+    assert a.plausible is False
+
+
+@pytest.mark.parametrize("said", [
+    "యాభై లక్షలు",       # 50 lakhs -- a genuine large factory
+    "వన్ లాక్ అండి",
+    "రెండు వేలు",
+    "టెన్ థౌసండ్ అండి.",
+])
+def test_real_bills_are_still_believed(said):
+    """Rejecting a real large bill is worse than accepting a silly one, so the
+    ceiling is deliberately generous."""
+    assert parse_amount(said).plausible is True
+
+
+def test_the_ceiling_admits_a_very_large_factory():
+    from api.services.vaani.amounts import MAX_PLAUSIBLE
+    assert MAX_PLAUSIBLE >= 10_000_000, "10 lakhs a month must remain credible"
