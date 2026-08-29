@@ -118,11 +118,33 @@ NOT_MONEY = re.compile(
 # are two orders below it. A salesperson who accepts that figure has stopped
 # listening, and the caller knows it.
 #
-# The ceiling is deliberately generous -- 5 crore a month is a very large
-# factory -- because rejecting a real large bill is worse than accepting a silly
-# one. The floor rules out a stray digit being read as a bill.
-MAX_PLAUSIBLE = 50_000_000
+# The ceiling was 5 crore, and run 312 walked straight through it. The caller
+# said "2,000 rupees"; Sarvam returned "రెండు కోట్లు" (2 crore); 20,000,000 sat
+# inside the bound, so the `doubted` path never fired and the agent
+# congratulated him on it -- "రెండు కోట్లు బిల్లు చాలా పెద్దది".
+#
+# The old comment justified the generous ceiling by saying that rejecting a real
+# large bill is worse than accepting a silly one. That premise was simply wrong
+# about what this gate does: it does not reject anything. An implausible figure
+# costs ONE turn of "did you mean thousands or crores?" -- and a caller with a
+# genuinely enormous bill is not offended by being asked to repeat it. Accepting
+# a misheard one costs the integrity of the lead record silently.
+#
+# So the ceiling is now set from what rooftop solar actually addresses. At the
+# ~Rs 8/unit industrial HT tariff, Rs 50 lakh a month is roughly 860 kW drawn
+# continuously -- already at the top of what any rooftop array can serve. A bill
+# above that is not this company's customer even when it is real, so confirming
+# it costs nothing. The floor rules out a stray digit being read as a bill.
+MAX_PLAUSIBLE = 5_000_000
 MIN_PLAUSIBLE = 100
+
+# The scale words Sarvam actually confuses with each other on phone audio.
+# "వేలు" (thousands) heard as "కోట్లు" (crores) is a 10,000x error out of one
+# syllable, and it is the single most damaging STT failure on this call type --
+# so when a figure is implausible, the agent asks WHICH SCALE rather than asking
+# vaguely to confirm. A generic "are you sure?" wastes the turn: the caller
+# repeats the same word and Sarvam mishears it the same way again.
+CONFUSABLE_SCALES = (10_000_000, 100_000, 1_000)
 
 
 @dataclass(frozen=True)
@@ -132,6 +154,11 @@ class Amount:
     rupees: int
     low: int | None = None      # set when they gave a range
     high: int | None = None
+    # The figure and the scale word it was attached to, kept separately so an
+    # implausible reading can be re-offered at a smaller scale. "రెండు కోట్లు"
+    # is figure=2, scale=10_000_000; the repair needs the 2, not the 20,000,000.
+    figure: float | None = None
+    scale: int | None = None
 
     @property
     def plausible(self) -> bool:
@@ -146,6 +173,29 @@ class Amount:
     @property
     def is_range(self) -> bool:
         return self.low is not None and self.high is not None
+
+    def alternatives(self) -> list[str]:
+        """The plausible readings of this figure at a smaller scale.
+
+        Run 312's "రెండు కోట్లు" returns ["2 వేలు", "2 లక్షలు"] -- which is
+        exactly the question worth asking, and the caller answers it in one
+        word. Asking "are you sure?" instead gets the same misheard syllable
+        back a second time.
+
+        Empty when there is nothing to offer -- a bare figure with no scale
+        word, or one where no smaller reading is plausible either. The caller is
+        then asked to repeat the figure plainly.
+        """
+        if self.figure is None or self.scale is None or self.is_range:
+            return []
+        out = []
+        for scale in CONFUSABLE_SCALES:
+            if scale >= self.scale:
+                continue
+            value = int(round(self.figure * scale))
+            if MIN_PLAUSIBLE <= value <= MAX_PLAUSIBLE:
+                out.append(Amount(rupees=value).say())
+        return out
 
     def say(self) -> str:
         """Read it back the way these callers say it, so it can be confirmed."""
@@ -231,6 +281,7 @@ def parse_amount(text: str) -> Amount | None:
 
     # Every (figure, scale) pair in the sentence, in order.
     found: list[int] = []
+    pairs: list[tuple[float, int]] = []
     for i, tok in enumerate(tokens):
         scale = SCALES.get(tok)
         if scale is None:
@@ -248,6 +299,7 @@ def parse_amount(text: str) -> Amount | None:
         if n is None:
             continue
         found.append(int(round(n * scale)))
+        pairs.append((n, scale))
 
     if not found:
         # A bare figure with no scale word: "50,000", "₹50000". Only accept it
@@ -272,4 +324,5 @@ def parse_amount(text: str) -> Amount | None:
         # 218's caller three times before he hung up.
         return Amount(rupees=(lo + hi) // 2, low=lo, high=hi)
 
-    return Amount(rupees=found[0])
+    figure, scale = pairs[0] if pairs else (None, None)
+    return Amount(rupees=found[0], figure=figure, scale=scale)

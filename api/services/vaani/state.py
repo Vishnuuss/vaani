@@ -171,6 +171,14 @@ class CallState:
     started_at: float = field(default_factory=time.time)
     disqualified: bool = False
     disqualify_reason: str = ""
+    # Set when the agent has just told the caller it could not hear him.
+    #
+    # Run 312 said "మీరు చెప్పినది బాగా వినిపించలేదు", got another garbled
+    # answer, read it as "no roof", and ended the call on a factory owner. An
+    # utterance the agent has already admitted it could not parse is not
+    # evidence for anything, least of all for hanging up. See
+    # `extractor.apply_to_state`.
+    misheard_last_turn: bool = False
     next_step_agreed: bool = False   # a visit/callback/time has been accepted
     buying_signal: bool = False      # caller asked to book, or asked a closing question
     refusals: int = 0                # plain refusals so far; the 2nd ends the call
@@ -608,13 +616,27 @@ class CallState:
                 # An impossible figure gets questioned, not celebrated.
                 if self.doubted is not None:
                     said = getattr(self.doubted, "say", lambda: "")()
+                    alts = getattr(self.doubted, "alternatives", lambda: [])()
                     self.doubted = None
-                    lines.append(
-                        f"THEY SAID THEIR BILL IS {said} -- that cannot be a "
-                        "monthly electricity bill. Say warmly that it sounds "
-                        "much larger than usual and ask them to confirm the "
-                        "monthly figure. Do NOT agree with it and do NOT "
-                        "praise it.")
+                    if alts:
+                        # Name the alternatives. Run 312's caller said 2,000 and
+                        # Sarvam returned 2 crore -- one misheard syllable,
+                        # 10,000x. "Are you sure?" gets that syllable back
+                        # unchanged; "thousands or crores?" is answered in one
+                        # word and cannot be misheard the same way twice.
+                        choices = " or ".join(alts + [said])
+                        lines.append(
+                            f"THEY SAID THEIR BILL IS {said} -- almost "
+                            f"certainly misheard. Ask which they meant: "
+                            f"{choices}. Do NOT agree with it and do NOT "
+                            "praise it.")
+                    else:
+                        lines.append(
+                            f"THEY SAID THEIR BILL IS {said} -- that cannot be "
+                            "a monthly electricity bill. Say warmly that it "
+                            "sounds much larger than usual and ask them to "
+                            "confirm the monthly figure. Do NOT agree with it "
+                            "and do NOT praise it.")
 
                 # React to the SIZE of the bill, not just record it.
                 #

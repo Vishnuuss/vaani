@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from api.services.vaani.amounts import parse_amount
+from api.services.vaani.amounts import Amount, parse_amount
 
 # (utterance, rupees, which run it came from)
 REAL = [
@@ -142,11 +142,28 @@ def test_an_impossible_bill_is_heard_but_not_believed(said, rupees):
     "టెన్ థౌసండ్ అండి.",
 ])
 def test_real_bills_are_still_believed(said):
-    """Rejecting a real large bill is worse than accepting a silly one, so the
-    ceiling is deliberately generous."""
+    """A real large bill must never be doubted -- Rs 50 lakh a month is a
+    genuine large factory and the best lead this agent can get."""
     assert parse_amount(said).plausible is True
 
 
 def test_the_ceiling_admits_a_very_large_factory():
+    """Rewritten after run 312, where the old ceiling let 2 crore through.
+
+    The old assertion read `MAX_PLAUSIBLE >= 10_000_000` while its own message
+    said "10 lakhs a month must remain credible". Those are not the same number
+    -- 10 lakh is 1,000,000 -- so the test was enforcing a bound ten times
+    looser than the reason it gave for it. The stated intent is what is
+    asserted here now, plus the ceiling that intent actually implies.
+
+    At the ~Rs 8/unit industrial HT tariff, Rs 50 lakh a month is roughly 860 kW
+    drawn continuously, already at the top of what a rooftop array can serve.
+    Above that the caller is not this company's customer even when the figure is
+    real, so asking him to confirm it costs nothing.
+    """
     from api.services.vaani.amounts import MAX_PLAUSIBLE
-    assert MAX_PLAUSIBLE >= 10_000_000, "10 lakhs a month must remain credible"
+    assert Amount(rupees=1_000_000).plausible, "10 lakhs a month is credible"
+    assert Amount(rupees=5_000_000).plausible, "50 lakhs a month is credible"
+    assert not Amount(rupees=20_000_000).plausible, (
+        "2 crore a month is what run 312 recorded from a caller saying 2,000")
+    assert MAX_PLAUSIBLE == 5_000_000

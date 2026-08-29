@@ -22,6 +22,7 @@ import logging
 import re
 
 from api.services.vaani import amounts
+from api.services.vaani.negation import is_negative
 from api.services.vaani.state import _is_money_field
 
 log = logging.getLogger("vaani.extractor")
@@ -33,6 +34,10 @@ Return ONLY a JSON object. No prose, no markdown, no code fences.
 Rules:
 - Include a key ONLY if the customer actually stated it. Never infer or guess.
 - If the customer did not answer something, omit that key entirely.
+- NEVER answer false, "no" or "none" for a field unless the customer actually
+  said no. An answer you cannot make sense of is NOT a no -- omit the key. An
+  answer to a different question is NOT a no -- omit the key. Saying where
+  something is ("on the factory", "on our terrace") is a YES, not a no.
 - Values must be short and in English, normalised.
 - Also include "objection" if they raised one, as one of:
   price, timing, spouse, trust, not_interested, busy, competitor
@@ -108,10 +113,58 @@ def _is_plausible_money(value) -> bool:
     return amounts.MIN_PLAUSIBLE <= rupees <= amounts.MAX_PLAUSIBLE
 
 
-def apply_to_state(state, data: dict, fields: list[str]) -> None:
-    """Merge extracted facts into CallState. Tolerant of extra/missing keys."""
+_FALSEY = {False, "false", "no", "none", "not available", "nil", "0"}
+
+
+def _is_denial(value) -> bool:
+    """Is this extracted value asserting that something is NOT the case?"""
+    if isinstance(value, bool):
+        return value is False
+    return isinstance(value, str) and value.strip().lower() in _FALSEY
+
+
+def apply_to_state(state, data: dict, fields: list[str],
+                   user_text: str = "") -> None:
+    """Merge extracted facts into CallState. Tolerant of extra/missing keys.
+
+    `user_text` is what the caller actually said. It is the evidence for any
+    NEGATIVE fact -- see the gate below and `negation.py`.
+    """
+    # Read and cleared at the top, BEFORE the empty-data return below.
+    #
+    # Clearing it at the bottom instead latched it forever: a turn that
+    # extracted nothing returned early, the flag stayed raised, and every later
+    # disqualifier in the call was silently suppressed. The first version of
+    # this did exactly that, and `test_the_grace_lasts_exactly_one_turn` is why
+    # it is not still doing it. One turn of grace means one turn.
+    misheard = bool(getattr(state, "misheard_last_turn", False))
+    state.misheard_last_turn = False
+
     if not data:
         return
+    # A negative fact needs an actual negation in the caller's own words.
+    #
+    # Run 312: "ఎక్కడండి ట్రాక్టర్ పైన మా ట్రాక్టర్ పైన" (on our tractor --
+    # itself a garbling of "on our factory") produced `roof_available: false`,
+    # and the agent told a factory owner solar was not possible for him and hung
+    # up. There is no "no" anywhere in that sentence. The model inferred one,
+    # which is exactly what the prompt above forbids and cannot enforce.
+    #
+    # Dropping the key instead leaves the field unknown, which puts it back in
+    # STILL_NEED and the agent asks again. One wasted question against a lost
+    # lead is not a close call.
+    #
+    # Only applied when we actually have the caller's words: a caller-text-less
+    # call (the final end-of-call extraction re-reads the whole transcript) is
+    # left alone rather than silently stripped of every negative.
+    if user_text and not is_negative(user_text):
+        denied = [k for k, v in data.items()
+                  if k in fields and _is_denial(v)]
+        for key in denied:
+            log.info("dropping %s=%r -- no negation in %r",
+                     key, data[key], user_text[:80])
+            data = {k: v for k, v in data.items() if k != key}
+
     for key, value in data.items():
         if key in ("objection", "disqualified", "disqualify_reason",
                    "buying_signal", "next_step_agreed", "must_end", "end_reason"):
@@ -154,8 +207,19 @@ def apply_to_state(state, data: dict, fields: list[str]) -> None:
         state.end_reason = str(data.get("end_reason", "the caller wants the call to end."))
 
     if data.get("disqualified") is True:
-        state.disqualified = True
-        state.disqualify_reason = str(data.get("disqualify_reason", "stated disqualifier"))
+        if misheard:
+            # The agent said "I could not hear you" one turn ago. Disqualifying
+            # on the reply to that is how run 312 ended: two garbled words about
+            # a tractor, and a factory owner was told solar was not possible for
+            # him. A disqualifier is the one decision in this call that cannot
+            # be walked back, so it needs an utterance we actually understood.
+            log.info("not disqualifying (%s) -- previous turn was a misheard "
+                     "repair", data.get("disqualify_reason"))
+        else:
+            state.disqualified = True
+            state.disqualify_reason = str(
+                data.get("disqualify_reason", "stated disqualifier"))
+
 
 
 def spawn(llm, state, fields, disqualifiers, user_text, agent_text="") -> asyncio.Task:
@@ -163,7 +227,7 @@ def spawn(llm, state, fields, disqualifiers, user_text, agent_text="") -> asynci
 
     async def _run() -> None:
         data = await extract(llm, fields, disqualifiers, user_text, agent_text)
-        apply_to_state(state, data, fields)
+        apply_to_state(state, data, fields, user_text)
         if data:
             log.info("extracted %s", data)
 

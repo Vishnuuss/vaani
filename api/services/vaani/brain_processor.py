@@ -228,6 +228,12 @@ class ReplyFilter(FrameProcessor):
                 f"[repeat] already asked this; saying it could not hear "
                 f"instead: {candidate[:60]!r}"
             )
+            # Whatever comes back next is an answer to a question the caller
+            # has now heard twice and we have already failed to understand
+            # once. It is not evidence for a disqualifier. Run 312 hung up on
+            # a factory owner at exactly this point.
+            if self._injector:
+                self._injector.state.misheard_last_turn = True
             return guardrails.REPAIR_LINE
 
         closing = bool(self._injector) and guardrails.must_close(
