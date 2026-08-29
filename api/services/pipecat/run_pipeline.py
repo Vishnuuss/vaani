@@ -1155,6 +1155,7 @@ async def _run_pipeline_impl(
                     getattr(user_config.llm, "api_key", None),
                     getattr(user_config.llm, "model", None),
                     _vaani_prompt,
+                    report=in_memory_logs_buffer.append,
                 )
 
             # So a booked appointment reaches the saved lead record. Without

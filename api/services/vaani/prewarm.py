@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from loguru import logger
 
@@ -51,7 +52,8 @@ TIMEOUT_S = 8.0
 MAX_TOKENS = 1
 
 
-async def _warm(api_key: str, model: str, system_prompt: str, base_url: str) -> None:
+async def _warm(api_key: str, model: str, system_prompt: str, base_url: str,
+                report=None) -> None:
     import aiohttp
 
     payload = {
@@ -65,6 +67,7 @@ async def _warm(api_key: str, model: str, system_prompt: str, base_url: str) -> 
         ],
         "max_completion_tokens": MAX_TOKENS,
     }
+    started = time.monotonic()
     timeout = aiohttp.ClientTimeout(total=TIMEOUT_S)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(
@@ -77,8 +80,35 @@ async def _warm(api_key: str, model: str, system_prompt: str, base_url: str) -> 
             if resp.status != 200:
                 logger.info(f"[prewarm] provider returned {resp.status}: {body[:160]}")
                 return
-    logger.info(f"[prewarm] cached {len(system_prompt):,} chars of prompt "
-                "before the first turn")
+    wall = time.monotonic() - started
+
+    # How much of the LLM's time is the network rather than the model.
+    #
+    # Groq reports its own timings in `usage`. Subtracting them from the wall
+    # clock leaves the round trip, and that number decides whether the LLM is
+    # slow or merely far away: this server is in Mumbai and api.groq.com
+    # resolves to Toronto, which would put a transcontinental hop on every turn
+    # of every call. It has never been measured, so it has never been fixed.
+    server = 0.0
+    try:
+        usage = (json.loads(body).get("usage") or {})
+        server = float(usage.get("total_time") or 0.0) + float(
+            usage.get("queue_time") or 0.0)
+    except Exception:
+        pass
+    network = max(0.0, wall - server)
+    logger.info(f"[prewarm] cached {len(system_prompt):,} chars; "
+                f"wall {wall:.3f}s, provider {server:.3f}s, network {network:.3f}s")
+    if report:
+        try:
+            await report({"type": "rtf-prewarm", "payload": {
+                "wall_secs": round(wall, 4),
+                "provider_secs": round(server, 4),
+                "network_secs": round(network, 4),
+                "prompt_chars": len(system_prompt),
+            }})
+        except Exception:
+            pass
 
 
 def prewarm_prompt_cache(
@@ -87,6 +117,7 @@ def prewarm_prompt_cache(
     system_prompt: str | None,
     *,
     base_url: str = "https://api.groq.com/openai/v1",
+    report=None,
 ) -> asyncio.Task | None:
     """Fire the warming request and return immediately.
 
@@ -98,7 +129,7 @@ def prewarm_prompt_cache(
 
     async def run() -> None:
         try:
-            await _warm(api_key, model, system_prompt, base_url)
+            await _warm(api_key, model, system_prompt, base_url, report)
         except asyncio.CancelledError:
             raise
         except Exception as e:
