@@ -48,6 +48,10 @@ from loguru import logger
 # task is always gone before it could overlap the caller's first answer.
 TIMEOUT_S = 8.0
 
+# The benchmark makes several requests in one session, so it gets its own,
+# larger budget. It runs after the warm-up and blocks nothing.
+BENCH_TIMEOUT_S = 30.0
+
 # The reply is thrown away; only the cached prefix is wanted.
 MAX_TOKENS = 1
 
@@ -170,7 +174,7 @@ async def benchmark_models(api_key: str, system_prompt: str, report=None,
     import aiohttp
 
     out = []
-    timeout = aiohttp.ClientTimeout(total=TIMEOUT_S)
+    timeout = aiohttp.ClientTimeout(total=BENCH_TIMEOUT_S)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for model in BENCH_MODELS:
             try:
@@ -178,6 +182,20 @@ async def benchmark_models(api_key: str, system_prompt: str, report=None,
                                             system_prompt, base_url))
             except Exception as e:
                 out.append({"model": model, "error": repr(e)[:90]})
+
+        # Does the PROMPT decide the time rather than the model? Same model,
+        # same server, same moment -- only the length changes.
+        live = BENCH_MODELS[0]
+        for frac in BENCH_PROMPT_FRACTIONS:
+            cut = system_prompt[: max(200, int(len(system_prompt) * frac))]
+            try:
+                r = await _bench_one(session, api_key, live, cut, base_url)
+                r["prompt_chars"] = len(cut)
+                r["fraction"] = frac
+                out.append(r)
+            except Exception as e:
+                out.append({"fraction": frac, "error": repr(e)[:90]})
+
     logger.info(f"[bench] {out}")
     if report:
         try:
