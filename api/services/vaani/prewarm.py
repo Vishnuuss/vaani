@@ -137,9 +137,18 @@ BENCH_MODELS = ("openai/gpt-oss-20b",)
 # the provider's cache and therefore nearly free. That reasoning was about COST.
 # A cache read is not free in TIME, and this measures whether it is the term
 # that matters.
-# Run 284 showed length does not predict the time, so the sweep now repeats
-# ONE size several times: the thing being measured is variance.
-BENCH_PROMPT_FRACTIONS = (1.0, 1.0, 1.0, 1.0, 1.0)
+# Run 289 separated queue from compute and the answer appeared. Same model, same
+# prompt, six times: compute was 0.034, 0.403, 0.035, 0.063, 0.466, 0.033 while
+# queue stayed flat at ~0.05. That is a prompt-cache HIT against a MISS, not
+# noise -- and it explains every dead end so far. Prompt length looked
+# uncorrelated because hits and misses were being averaged together; the smaller
+# model looked no faster for the same reason; and hedging helps because three
+# requests get three chances at a warm worker.
+#
+# So the question is no longer "how long" but "how much does a MISS cost, and
+# does prompt size change it". Each size is sampled several times so the two
+# modes can be told apart instead of blurred.
+BENCH_PROMPT_FRACTIONS = (1.0, 1.0, 1.0, 0.25, 0.25, 0.25, 0.05, 0.05, 0.05)
 
 
 async def _bench_one(session, api_key, model, system_prompt, base_url):
