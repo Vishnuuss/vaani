@@ -36,11 +36,42 @@ DEFAULT_TURN_STOP_STRATEGY = "turn_analyzer"  # semantic, in-process, no network
 # False = the semantic turn detector ends the turn; the transcript is
 # bookkeeping and leaves the latency critical path (~438 ms/turn).
 DEFAULT_TURN_WAIT_FOR_TRANSCRIPT = False
-# OFF. Measured 0% hit rate over 9 real turns: qualification callers answer in
-# two words, so there is never time for two partials to agree before the turn
-# ends. It cost an extra LLM call per turn and returned nothing. Kept behind the
-# flag rather than deleted, in case a long-utterance use case appears.
-DEFAULT_SPECULATION_ENABLED = False
+# ON, after the reason for the 0% hit rate turned out to be a bug in the trigger
+# rather than a fact about the traffic.
+#
+# The old note read: "Measured 0% hit rate over 9 real turns: qualification
+# callers answer in two words, so there is never time for two partials to agree
+# before the turn ends." The first half was measured. The second half was the
+# wrong conclusion drawn from it.
+#
+# The trigger fired on the common prefix of the last TWO partials, which cannot
+# contain the newest word:
+#
+#     partial "వన్"              fires on nothing
+#     partial "వన్ లాక్"          fires on "వన్"
+#     partial "వన్ లాక్ అండి"     fires on "వన్ లాక్"
+#     final   "వన్ లాక్ అండి"     MISS -- one word behind, always
+#
+# 0% was structural. It fired on the newest partial and the same sequences hit.
+#
+# WHY THIS CANNOT INTERRUPT, which is the objection that matters. Speculation
+# changes when the agent THINKS, never when it SPEAKS. The coordinator hands
+# tokens over only through `take_response_for`, which the gate calls only on an
+# LLM trigger frame -- and that frame arrives only after the turn detector has
+# ended the turn. A wrong guess is cancelled and cannot reach the caller. The
+# turn detector keeps sole authority over when the agent opens its mouth.
+#
+# WHAT WENT WRONG LAST TIME. Run 92 lost a call entirely -- zero pipeline
+# events. The probe passed frames through untouched but issued REAL generations,
+# and with hedging already sending three requests per turn, firing again on
+# every partial multiplies concurrent load on the provider. Contention, not
+# logic. So speculation is now capped at 2 generations per turn and skips
+# one-word partials.
+#
+# Expected: the LLM's 0.279s p50 moves inside the 0.758s endpoint window it is
+# already spending, taking the total from ~1.10s toward ~0.82s -- on the turns
+# that hit. Misses cost tokens and nothing else.
+DEFAULT_SPECULATION_ENABLED = True
 DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 # Race N identical completions per turn and speak whichever answers first.
 # Measured on Groq gpt-oss-120b (bench/hedge.py, 2026-08-27): one request returns

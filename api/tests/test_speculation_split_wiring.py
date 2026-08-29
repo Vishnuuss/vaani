@@ -72,7 +72,9 @@ async def test_the_probe_feeds_partials_so_generation_starts_mid_turn():
         )
     await _settle()
 
-    assert llm.calls == ["నా ఇల్లు"]
+    # The newest partial, not the lagging two-partial prefix. Superseded
+    # generations are cancelled before their body runs, so only one appears.
+    assert llm.calls == ["నా ఇల్లు నాదే"]
 
 
 @pytest.mark.asyncio
@@ -86,7 +88,7 @@ async def test_the_gate_replays_using_the_final_text_the_probe_recorded():
     await _settle()
     # The gate never sees this frame in the real pipeline — the probe does.
     await probe.process_frame(
-        TranscriptionFrame("నా ఇల్లు", "user", ""), FrameDirection.DOWNSTREAM
+        TranscriptionFrame("నా ఇల్లు నాదే", "user", ""), FrameDirection.DOWNSTREAM
     )
 
     await gate.process_frame(LLMRunFrame(), FrameDirection.DOWNSTREAM)

@@ -5,15 +5,25 @@ talking, then STT -> LLM -> TTS run in sequence. Vapi-class systems overlap that
 boundary — they start generating while the caller is still speaking and discard
 the work if they guessed wrong.
 
-This coordinator owns that overlap:
+    caller still speaking  ->  newest partial  ->  generation starts
+    caller stops           ->  text matches?   ->  replay buffered tokens
+                                                   (LLM time = 0)
+                           ->  text differs?   ->  cancel, fall through
 
-    caller still speaking  ->  stable prefix appears  ->  generation starts
-    caller stops           ->  text matches?          ->  replay buffered tokens
-                                                          (LLM time = 0)
-                           ->  text differs?          ->  cancel, fall through
+**The safety property, and it is structural.** This class never speaks. It hands
+tokens back only when `take_response_for` is called, which happens only once the
+turn detector has ended the turn, and only when the final text matches what was
+speculated on EXACTLY. A wrong guess costs tokens and cannot reach the caller.
+That is what makes speculation safe to run during someone's sentence: it changes
+when the agent THINKS, never when it SPEAKS.
 
-The LLM call itself is injected, so this is provider-agnostic and testable
-without a network.
+Updated 2026-08-29 for the trigger change. The old rule fired on the common
+prefix of the last two partials, so these tests were written with the final
+equal to the FIRST partial. It now fires on the newest partial, because the old
+rule structurally excluded the last word and could never hit a short Telugu
+answer -- see test_stable_prefix.py.
+
+The LLM call is injected, so this is provider-agnostic and testable offline.
 """
 
 import asyncio
@@ -56,12 +66,34 @@ async def test_it_starts_generating_while_the_caller_is_still_speaking():
     coord = SpeculationCoordinator(generate=llm)
 
     await coord.on_partial("నా ఇల్లు")
-    await coord.on_partial("నా ఇల్లు నాదే")  # prefix "నా ఇల్లు" is now stable
-    await _settle()  # let the scheduled task actually enter the generator
+    await coord.on_partial("నా ఇల్లు నాదే")
+    await _settle()
 
     # The turn has NOT ended — take_response_for was never called — so this
     # proves generation began while the caller was still speaking.
-    assert llm.calls == ["నా ఇల్లు"], "should have started generating mid-turn"
+    #
+    # Only the newest survives: when partials arrive faster than a generation
+    # starts, the superseded one is cancelled before its coroutine body ever
+    # runs, so it costs nothing at all.
+    assert llm.calls == ["నా ఇల్లు నాదే"]
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_produced_until_the_turn_actually_ends():
+    """The safety property. Speculation must change when it THINKS, not when
+    it SPEAKS -- otherwise it would be an interruption."""
+    llm = FakeLLM(reply="అలాగే అండి")
+    coord = SpeculationCoordinator(generate=llm)
+
+    await coord.on_partial("నా ఇల్లు")
+    await coord.on_partial("నా ఇల్లు నాదే")
+    await _settle()
+
+    # Generation ran, but the coordinator has handed nothing to anybody. The
+    # only way tokens leave this object is take_response_for, and the turn
+    # detector is what calls it.
+    assert llm.calls, "it should have generated in the background"
+    assert coord._task is not None, "the reply is buffered, not emitted"
 
 
 @pytest.mark.asyncio
@@ -73,11 +105,30 @@ async def test_a_matching_turn_gets_the_pre_generated_response():
     await coord.on_partial("నా ఇల్లు నాదే")
     await _settle()
 
-    tokens = await coord.take_response_for("నా ఇల్లు")
+    tokens = await coord.take_response_for("నా ఇల్లు నాదే")
 
     assert tokens is not None
     assert "".join(tokens).strip() == "అలాగే అండి"
-    assert len(llm.calls) == 1, "must not call the LLM a second time on a hit"
+    before = len(llm.calls)
+    assert await coord.take_response_for("నా ఇల్లు నాదే") is None
+    assert len(llm.calls) == before, "must not call the LLM again on a hit"
+
+
+@pytest.mark.asyncio
+async def test_a_short_telugu_answer_is_a_hit():
+    """The case the old trigger could never win: three words, spoken quickly.
+
+    Run 274's caller said exactly this and was asked the same question three
+    times; the speculation for it always fired one word short.
+    """
+    llm = FakeLLM(reply="సరే")
+    coord = SpeculationCoordinator(generate=llm)
+
+    for partial in ("వన్", "వన్ లాక్", "వన్ లాక్ అండి"):
+        await coord.on_partial(partial)
+    await _settle()
+
+    assert await coord.take_response_for("వన్ లాక్ అండి") is not None
 
 
 @pytest.mark.asyncio
@@ -89,9 +140,22 @@ async def test_a_mismatching_turn_gets_nothing_so_the_real_llm_runs():
     await coord.on_partial("నాకు లోన్ కావాలి")
     await _settle()
 
-    tokens = await coord.take_response_for("నాకు ఇల్లు కావాలి")
+    assert await coord.take_response_for("నాకు ఇల్లు కావాలి") is None
 
-    assert tokens is None
+
+@pytest.mark.asyncio
+async def test_a_caller_who_keeps_talking_is_never_answered_half_way():
+    """Run 287: "మాది." then, a moment later, "ఇండస్ట్రీ ఉంది ఒకటి".
+
+    Answering the fragment would be the interruption this project has spent the
+    day removing. A prefix match is deliberately a MISS.
+    """
+    coord = SpeculationCoordinator(generate=FakeLLM())
+
+    await coord.on_partial("మాది")
+    await _settle()
+
+    assert await coord.take_response_for("మాది ఇండస్ట్రీ ఉంది ఒకటి") is None
 
 
 @pytest.mark.asyncio
@@ -103,20 +167,21 @@ async def test_a_turn_with_no_speculation_gets_nothing():
 
 @pytest.mark.asyncio
 async def test_a_backwards_revision_cancels_the_in_flight_generation():
+    """Sarvam revises partials backwards as it re-scores (FINDINGS 5b)."""
     llm = FakeLLM(delay=0.01)  # slow enough to still be running
     coord = SpeculationCoordinator(generate=llm)
 
     await coord.on_partial("నాకు లోన్")
-    await coord.on_partial("నాకు లోన్ కావాలి")  # fires on "నాకు లోన్"
+    await coord.on_partial("నాకు లోన్ కావాలి")
     await _settle()
-    assert llm.calls == ["నాకు లోన్"], "generation should be in flight"
+    assert llm.calls[-1] == "నాకు లోన్ కావాలి", "generation should be in flight"
 
     await coord.on_partial("నాకు ఇల్లు కావాలి")  # decoder revised — contradicts it
     await _settle()
 
-    # The work must actually be torn down, not just ignored — otherwise a
-    # stale generation for words the caller never said stays alive.
-    assert llm.cancelled == 1
+    # The work must actually be torn down, not just ignored — otherwise a stale
+    # generation for words the caller never said stays alive.
+    assert llm.cancelled >= 1
     assert await coord.take_response_for("నాకు ఇల్లు కావాలి") is None
 
 
@@ -128,8 +193,8 @@ async def test_the_response_can_only_be_taken_once():
     await coord.on_partial("అవును సరే")
     await _settle()
 
-    assert await coord.take_response_for("అవును") is not None
-    assert await coord.take_response_for("అవును") is None
+    assert await coord.take_response_for("అవును సరే") is not None
+    assert await coord.take_response_for("అవును సరే") is None
 
 
 @pytest.mark.asyncio
@@ -139,7 +204,7 @@ async def test_it_records_hits_and_misses_for_the_latency_case():
     await coord.on_partial("అవును")
     await coord.on_partial("అవును సరే")
     await _settle()
-    await coord.take_response_for("అవును")  # hit
+    await coord.take_response_for("అవును సరే")  # hit
 
     coord.reset_turn()
     await coord.on_partial("కాదు")

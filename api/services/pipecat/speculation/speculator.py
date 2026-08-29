@@ -79,6 +79,26 @@ def _is_prefix(prefix: list[str], words: list[str]) -> bool:
     return len(prefix) <= len(words) and words[: len(prefix)] == prefix
 
 
+# At most this many generations per caller turn.
+#
+# Speculation was disabled once before after run 92 lost a call entirely -- zero
+# pipeline events. The probe was a pass-through on frames but issued REAL
+# generations, and with hedging already sending three requests per turn, firing
+# again on every partial multiplies concurrent load on the provider. The
+# suspected failure is contention, not logic.
+#
+# Two is enough to win the case: the last partial before the caller stops is
+# usually the whole utterance, and the one before it catches the case where the
+# final arrives while a generation is still in flight. Beyond that each extra
+# firing buys less and costs more.
+MAX_SPECULATIONS_PER_TURN = 2
+
+# A one-word partial is skipped. It is the least likely to be the final text and
+# the most likely to be someone mid-sentence -- run 287's "మాది." was exactly
+# that, and answering it would have been the interruption this must never cause.
+MIN_WORDS_TO_SPECULATE = 2
+
+
 class Speculator:
     """Decides when to speculate, when to abandon it, and scores the result."""
 
@@ -86,6 +106,7 @@ class Speculator:
         self._tracker = StablePrefixTracker()
         self._speculated: list[str] | None = None
         self._stats = SpeculationStats()
+        self._fired_this_turn = 0
 
     def on_partial(self, partial: str) -> SpecCommand:
         words = partial.split()
@@ -98,7 +119,13 @@ class Speculator:
             return SpecCommand(action=SpecAction.CANCEL)
 
         result = self._tracker.observe(partial)
+        if (result.action is Action.FIRE
+                and len(result.stable_prefix.split()) < MIN_WORDS_TO_SPECULATE):
+            return SpecCommand(action=SpecAction.HOLD)
+        if self._fired_this_turn >= MAX_SPECULATIONS_PER_TURN:
+            return SpecCommand(action=SpecAction.HOLD)
         if result.action is Action.FIRE and result.stable_prefix:
+            self._fired_this_turn += 1
             self._speculated = result.stable_prefix.split()
             self._stats.fired += 1
             return SpecCommand(action=SpecAction.FIRE, text=result.stable_prefix)
@@ -136,6 +163,7 @@ class Speculator:
     def reset_turn(self) -> None:
         self._tracker = StablePrefixTracker()
         self._speculated = None
+        self._fired_this_turn = 0
 
     @property
     def stats(self) -> SpeculationStats:

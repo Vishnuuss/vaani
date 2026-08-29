@@ -15,13 +15,17 @@ from api.services.pipecat.speculation.speculator import (
 )
 
 
-def test_it_fires_once_the_prefix_is_stable():
+def test_it_fires_on_everything_the_caller_has_said_so_far():
+    """Updated 2026-08-29. The old rule fired on the common prefix of the last
+    two partials, which excludes the newest word and therefore could never match
+    a short Telugu answer -- a structural 0% hit rate. See test_stable_prefix.py.
+    """
     spec = Speculator()
     spec.on_partial("నా ఇల్లు")
     command = spec.on_partial("నా ఇల్లు నాదే")
 
     assert command.action is SpecAction.FIRE
-    assert command.text == "నా ఇల్లు"
+    assert command.text == "నా ఇల్లు నాదే"
 
 
 def test_it_cancels_when_the_caller_turns_out_to_have_said_something_else():
@@ -38,12 +42,21 @@ def test_it_cancels_when_the_caller_turns_out_to_have_said_something_else():
 def test_an_exact_match_at_turn_end_is_a_hit():
     spec = Speculator()
     spec.on_partial("నా ఇల్లు")
-    spec.on_partial("నా ఇల్లు నాదే")  # fires on "నా ఇల్లు"
+    spec.on_partial("నా ఇల్లు నాదే")  # fires on the whole thing
 
-    outcome = spec.on_turn_end("నా ఇల్లు")
+    outcome = spec.on_turn_end("నా ఇల్లు నాదే")
 
     assert outcome is Outcome.HIT
     assert spec.stats.hits == 1
+
+
+def test_a_short_telugu_answer_can_now_hit():
+    """Run 274's utterance. Under the old rule this was a guaranteed miss."""
+    spec = Speculator()
+    for partial in ("వన్", "వన్ లాక్", "వన్ లాక్ అండి"):
+        spec.on_partial(partial)
+
+    assert spec.on_turn_end("వన్ లాక్ అండి") is Outcome.HIT
 
 
 def test_speaking_before_the_caller_finished_is_not_counted_as_a_hit():
@@ -85,7 +98,7 @@ def test_hit_rate_counts_only_clean_hits_over_all_turns():
 
     for text in ("అవును", "అవును సరే"):
         spec.on_partial(text)
-    spec.on_turn_end("అవును")  # HIT
+    spec.on_turn_end("అవును సరే")  # HIT
 
     spec.reset_turn()
     for text in ("కాదు", "కాదు లేదు"):

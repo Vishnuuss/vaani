@@ -59,7 +59,7 @@ async def test_it_scores_a_clean_hit_from_the_live_frame_stream():
 
     for frame in (_interim("నా ఇల్లు"), _interim("నా ఇల్లు నాదే")):
         await probe.process_frame(frame, FrameDirection.DOWNSTREAM)
-    await probe.process_frame(_final("నా ఇల్లు"), FrameDirection.DOWNSTREAM)
+    await probe.process_frame(_final("నా ఇల్లు నాదే"), FrameDirection.DOWNSTREAM)
 
     assert probe.stats.turns == 1
     assert probe.stats.hits == 1
@@ -69,7 +69,7 @@ async def test_it_scores_a_clean_hit_from_the_live_frame_stream():
 async def test_each_final_transcript_starts_a_fresh_turn():
     probe, _ = _make_probe()
 
-    for frame in (_interim("అవును"), _interim("అవును సరే"), _final("అవును")):
+    for frame in (_interim("అవును"), _interim("అవును సరే"), _final("అవును సరే")):
         await probe.process_frame(frame, FrameDirection.DOWNSTREAM)
     for frame in (_interim("కాదు"), _interim("కాదు లేదు"), _final("వేరే మాట")):
         await probe.process_frame(frame, FrameDirection.DOWNSTREAM)
