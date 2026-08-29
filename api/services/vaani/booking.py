@@ -184,7 +184,18 @@ class Slot:
         names = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
                  7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
                  12: "twelve"}
-        return f"{day} {part} {names.get(hour12, str(hour12))} oclock"
+        # "ten గంటలకు", not "ten oclock".
+        #
+        # The English NUMBER is deliberate -- Telugu callers say the hour in
+        # English and the client asked for it that way. "oclock" is not a
+        # number though; it is a bare English word dropped into a Telugu
+        # sentence, and run 314 shows Cartesia reading "రేపు ఉదయం ten oclock"
+        # exactly as badly as it looks. Worse, the Telugu case suffix ends up
+        # glued to it -- run 300 said "four oclockకి".
+        #
+        # The parser reads this back unchanged: it already accepts "గంట" as a
+        # clock marker and resolves "ten" through NUMBER_WORDS.
+        return f"{day} {part} {names.get(hour12, str(hour12))} గంటలకు"
 
 
 def _as_dt(value) -> datetime | None:

@@ -59,6 +59,15 @@ HESITATIONS = {
     "హా", "హం", "అం", "ఆం", "మ్మ్", "హ్మ్", "మ్", "అబ్బ",
     "uh", "uhh", "um", "umm", "uhm", "ah", "aa", "aaa", "er", "err",
     "hmm", "hm", "hmmm", "mm", "mmm", "eh", "oh",
+    # Sarvam writes English fillers in Telugu script, and until run 314 none of
+    # these were here. The caller said "um... Bhaskar"; the transcript read
+    # "ఉమ్ భాస్కర్"; the name was stored as "ఉమ్ భాస్కర్" and the agent spent the
+    # rest of the call addressing him as **"ఉమ్ భాస్కర్ గారు"** -- "Mr. Um
+    # Bhaskar".
+    #
+    # "ఉమ్" carries a virama, so it ends in a bare consonant and is not a Telugu
+    # word. The NAME Uma is "ఉమ"/"ఉమా" and is deliberately NOT in this set.
+    "ఉమ్", "అమ్", "హ్మ్మ్", "ఎర్", "ఆహ్", "ఊమ్", "ఏమ్",
 }
 
 # Words whose grammar promises another clause. A sentence cannot stop on one.
@@ -123,3 +132,32 @@ def sounds_unfinished(text: str) -> bool:
         return True
 
     return False
+
+
+def strip_fillers(text: str) -> str:
+    """Remove hesitation noise from the EDGES of a value about to be stored.
+
+    Run 314 is why this exists. `customer_name` was stored as "ఉమ్ భాస్కర్" and
+    the agent addressed a real customer as "Mr. Um Bhaskar" for the rest of the
+    call. The hesitation vocabulary above already knew what a filler was -- it
+    had simply never been consulted anywhere except the turn-taking decision.
+
+    Edges only, never the middle. A filler between two words was said inside a
+    phrase the caller meant, and cutting there would splice two halves of a
+    sentence into something he never said. At the edges it is always noise.
+
+    Returns the original text if stripping would leave nothing -- a bare "ఉమ్"
+    is a real answer to "is anyone there?", and an empty string stored as a name
+    is worse than a wrong one because nothing downstream can see it happened.
+    """
+    if not text or not text.strip():
+        return text
+    toks = text.split()
+    lo, hi = 0, len(toks)
+    while lo < hi and toks[lo].strip(_PUNCT).lower() in HESITATIONS:
+        lo += 1
+    while hi > lo and toks[hi - 1].strip(_PUNCT).lower() in HESITATIONS:
+        hi -= 1
+    if lo >= hi:
+        return text
+    return " ".join(toks[lo:hi]).strip(_PUNCT)

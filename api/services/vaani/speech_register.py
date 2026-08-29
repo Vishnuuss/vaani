@@ -86,6 +86,11 @@ _NUMERALS_PLURAL = (
     "రెండు|మూడు|నాలుగు|ఐదు|ఆరు|ఏడు|ఎనిమిది|తొమ్మిది|పది|పదకొండు|పన్నెండు|"
     "టు|త్రీ|ఫోర్|ఫైవ్|సిక్స్|సెవెన్|ఎయిట్|నైన్|టెన్|"
     r"two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+")
+# A safety net for the same thing in text the MODEL wrote. It has seen
+# "oclock" in the offer line all day and copies the pattern into its own
+# sentences, where no amount of fixing booking.py reaches it.
+_OCLOCK = re.compile(r"\s*o\s*['’]?\s*clock(?:\s*(?:కి|కు|కీ))?", re.IGNORECASE)
+
 _HOURS = re.compile(rf"({_NUMERALS_PLURAL})(\s+)గంట(కు|కి)?(?![ల])")
 
 
@@ -149,7 +154,7 @@ def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     """
     if not text:
         return text
-    out = _hours(_ranges(text))
+    out = _hours(_ranges(_OCLOCK.sub(" గంటలకు", text)))
     if names:
         out = _names(out, names)
     for literary, said in SPOKEN:

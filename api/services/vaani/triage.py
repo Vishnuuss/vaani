@@ -123,6 +123,38 @@ REFUSAL = re.compile(
     re.IGNORECASE)
 
 
+# --- "we'll think about it and let you know" ---------------------------------
+# A deferral is NOT a refusal. He has not said no; he has said not now. The
+# difference matters, because the two deserve opposite handling and run 314 gave
+# them the same one:
+#
+#     USER : ఆ చెప్తాం మేము మళ్ళీ చెప్తాం.          we'll tell you, we'll tell you again
+#     BOT  : రేపు ఉదయం ten oclock లేదా ... ఏ సమయం మీకు బాగుంటుంది?
+#     USER : మేము చెప్తాం ఆలోచన చెప్తాం.            we'll think and tell you
+#     BOT  : రేపు ఉదయం ten oclock లేదా ... దయచేసి ... చెప్పండి.   <- the SAME question, plus "please"
+#     USER : అంటే మేము ఆలోచించి చెప్తాం దాని గురించి డిసైడ్ అవ్వలేం ఇంకా
+#            we'll think about it and tell you, we can't decide yet
+#
+# Three deferrals, and the agent asked its closing question twice near-verbatim,
+# the second time pleading. That is the behaviour the client described as
+# irritating, and he is right: pushing a "let me think" does not convert it, it
+# only converts a warm lead into someone who will not take the next call.
+#
+# Unlike a refusal, ONE of these ends the close. There is no gentle second
+# probe to be had -- the second ask IS the irritation.
+DEFERRAL = re.compile(
+    r"(ఆలోచించి\s*చెప్తా|ఆలోచించి\s*చెబుతా|ఆలోచిస్తా|ఆలోచించాలి"
+    r"|మళ్ళీ\s*చెప్తా|మళ్లీ\s*చెప్తా|తర్వాత\s*చెప్తా|తరువాత\s*చెప్తా"
+    r"|మేము\s*చెప్తాం|నేను\s*చెప్తాను|చెప్తాం\s*మేము"
+    r"|డిసైడ్\s*అవ్వలే|డిసైడ్\s*చేసుకొని|నిర్ణయించుకొని"
+    r"|ఇంకా\s*డిసైడ్|కొంచెం\s*టైమ్|టైమ్\s*కావాలి|తర్వాత\s*మాట్లాడ"
+    r"|घर\s*में\s*बात|सोचकर\s*बताता|बाद\s*में\s*बता"
+    r"|(think|thought)\s+(about|it|over)|let\s+you\s+know|get\s+back\s+to\s+you"
+    r"|call\s+you\s+back|need\s+(some\s+)?time|not\s+decided|can'?t\s+decide"
+    r"|later|maybe\s+later)",
+    re.IGNORECASE)
+
+
 @dataclass
 class Triage:
     must_end: bool = False
@@ -133,6 +165,7 @@ class Triage:
     next_step_agreed: bool = False
     no_more_questions: bool = False
     already_answered: bool = False
+    deferred: bool = False
 
     @property
     def any(self) -> bool:
@@ -166,11 +199,15 @@ def triage(text: str) -> Triage:
 
     # Closing signals. These do not end the call by themselves -- they change
     # what the agent is allowed to do on THIS turn.
+    # An accepted slot outranks a deferral: "రేపు ఉదయం ఓకే, తర్వాత చెప్తాను"
+    # is a booking with a comment attached, not a postponement.
+    agreed = bool(AGREED.search(t))
     return Triage(
-        next_step_agreed=bool(AGREED.search(t)),
+        next_step_agreed=agreed,
         buying_signal=bool(BUYING.search(t)),
         no_more_questions=bool(NO_MORE_QUESTIONS.search(t)),
         already_answered=bool(ALREADY_ANSWERED.search(t)),
+        deferred=bool(DEFERRAL.search(t)) and not agreed,
     )
 
 
@@ -199,6 +236,26 @@ def apply(state, text: str) -> Triage:
                                 "again. Thank them warmly and end the call.")
             result.must_end = True
             result.reason = state.end_reason
+
+    # A deferral, once the close has actually been put to him, ends the call.
+    #
+    # Not counted like a refusal, because there is no useful second ask. Run 314
+    # made the second ask -- the same sentence with "దయచేసి" (please) bolted on
+    # -- and got a third, firmer deferral for it. The lead was warm up to that
+    # point: he had given his bill, his roof, his name, and asked two questions
+    # about the company. He was pushed until he stopped being warm.
+    #
+    # Gated on `offered`, so the rule only applies once slots have been named.
+    # "I'll tell you the bill later" earlier in the call is a deferral about a
+    # question, not about the appointment, and it must not hang up on him.
+    if result.deferred and getattr(state, "offered", ()):
+        state.must_end = True
+        state.end_reason = (
+            "The caller wants time to think. Do NOT ask about the appointment "
+            "again and do NOT offer another time. Thank them warmly by name, "
+            "say they can call whenever they are ready, and end the call.")
+        result.must_end = True
+        result.reason = state.end_reason
 
     # Latch, never un-set -- a caller who agreed to a visit has agreed, even if
     # they chat about something else on the next turn.

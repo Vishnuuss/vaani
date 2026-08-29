@@ -31,9 +31,21 @@ def state() -> CallState:
 
 
 def test_the_offer_names_two_real_times():
+    """The clock word is Telugu; the hour stays English.
+
+    This asserted "oclock" until run 314, where Cartesia read
+    "రేపు ఉదయం ten oclock" aloud and it sounded exactly as spliced as it looks
+    -- a bare English word dropped into a Telugu sentence, with the Telugu case
+    suffix glued onto it ("four oclockకి") whenever a suffix was needed.
+
+    The English NUMBER stays: Telugu callers say the hour in English and the
+    client asked for it that way. Only "oclock" moves.
+    """
     block = state().render()
     assert "OFFER EXACTLY THESE TWO TIMES" in block
-    assert "oclock" in block, block
+    assert "గంటలకు" in block, block
+    assert "oclock" not in block, block
+    assert "ten" in block, block
 
 
 def test_the_offer_is_not_a_yes_no_question():

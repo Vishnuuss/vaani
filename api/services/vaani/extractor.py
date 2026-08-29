@@ -22,6 +22,7 @@ import logging
 import re
 
 from api.services.vaani import amounts
+from api.services.vaani.completeness import strip_fillers
 from api.services.vaani.negation import is_negative
 from api.services.vaani.state import _is_money_field
 
@@ -186,7 +187,14 @@ def apply_to_state(state, data: dict, fields: list[str],
                 # to confirm instead.
                 state.doubted = amounts.parse_amount(str(value))
                 continue
-            state.learn(key, str(value))
+            # "um" is not part of anybody's name.
+            #
+            # Run 314 stored `customer_name: "ఉమ్ భాస్కర్"` because the caller
+            # hesitated before saying it, and the agent then addressed him as
+            # "ఉమ్ భాస్కర్ గారు" -- Mr. Um Bhaskar -- for the remainder of the
+            # call. The filler vocabulary already existed; it had just never
+            # been applied to a value on its way into the record.
+            state.learn(key, strip_fillers(str(value)))
 
     objection = data.get("objection")
     if isinstance(objection, str) and objection:

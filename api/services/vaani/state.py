@@ -613,6 +613,17 @@ class CallState:
                 # three rules ran to 1,086 characters and took the LLM's first
                 # token from 0.22s to 0.655s -- total 1.27s to 2.10s on run 206.
                 # Same rules, said once.
+                # Saying "I could not hear you" and then asking something
+                # ELSE is how run 314 stored "సంతై" as a caller's city while he
+                # was saying "మంచిర్యాల్" for the second time. One line, because
+                # every line here is re-read on every turn and costs latency
+                # directly -- and it only appears on the turn after a misheard
+                # one, not on all of them.
+                if self.misheard_last_turn:
+                    lines.append(
+                        "YOU JUST SAID YOU COULD NOT HEAR THEM -- ask the SAME "
+                        "question again, not a different one.")
+
                 # An impossible figure gets questioned, not celebrated.
                 if self.doubted is not None:
                     said = getattr(self.doubted, "say", lambda: "")()

@@ -236,6 +236,13 @@ class ReplyFilter(FrameProcessor):
                 self._injector.state.misheard_last_turn = True
             return guardrails.REPAIR_LINE
 
+        # The model writing its OWN "I could not hear you" counts exactly like
+        # the guard writing one: whatever comes back next is an answer to a
+        # question we have already failed to understand once. Run 314 apologised
+        # for not hearing the city and asked about the property instead.
+        if self._injector and guardrails.SAID_NOT_HEARD.search(candidate):
+            self._injector.state.misheard_last_turn = True
+
         closing = bool(self._injector) and guardrails.must_close(
             self._injector.state)
         report = guardrails.check(

@@ -211,6 +211,24 @@ def blocking(report: "GuardrailReport") -> list["Violation"]:
 # Downloads/AISORIGIN_VIDEO/apgovt.mpeg -- it never repeats a sentence, and when
 # it mishears it says so. Run 96 asked the same question four times word for
 # word and the caller answered "you told me nothing".
+# The model writes its own version of the repair line, and when it does it
+# treats the apology as permission to move on. Run 314:
+#
+#   BOT : సారీ, మీరు ఏ ఏరియా లేదా సిటీలో ఉన్నారో వినిపించలేదు.
+#         మీది సొంత ఇల్లా, అపార్ట్‌మెంటా, లేదా కమర్షియల్ ప్లేసా?
+#
+# It apologised for not hearing the CITY and then asked about the PROPERTY. The
+# caller never got to answer the city, and "సంతై" -- a fragment of a later
+# sentence -- was stored as his location. He had said "మంచిర్యాల్లో"
+# (Mancherial) twice by then.
+#
+# Matching the model's own phrasing, not just REPAIR_LINE, because REPAIR_LINE
+# is only reached when the repetition guard fires.
+SAID_NOT_HEARD = re.compile(
+    r"(వినిపించలేదు|వినపడలేదు|అర్థం\s*కాలేదు|సరిగ్గా\s*విన"
+    r"|couldn'?t\s+(hear|catch)|did\s*n[o']?t\s+(hear|catch))",
+    re.IGNORECASE)
+
 REPAIR_LINE = (
     "క్షమించండి, సరిగ్గా వినిపించలేదు. "
     "కొంచెం నెమ్మదిగా మళ్ళీ చెప్తారా అండి?"
