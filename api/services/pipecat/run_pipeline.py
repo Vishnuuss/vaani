@@ -58,6 +58,7 @@ from api.services.vaani.end_call_bridge import EndCallBridge
 from api.services.vaani import turn_taking as vaani_turn_taking
 from api.services.vaani import ReplyFilter, StateInjector
 from api.services.vaani.filler_player import FillerPlayer, FillerState
+from api.services.vaani.prewarm import prewarm_prompt_cache
 from api.services.vaani import Brief as VaaniBrief
 from api.services.vaani import compile_prompt as compile_vaani_prompt
 from api.services.pipecat.speculation.llm_generator import make_llm_generator
@@ -1144,6 +1145,18 @@ async def _run_pipeline_impl(
                 workflow_name=getattr(workflow, "name", "") or "",
                 filler_state=filler_state,
             )
+            # Warm the provider's prompt cache while the greeting plays. The
+            # first turn of a call costs an extra 0.393s at the median and over
+            # a second at the tail, purely because the prefix is not cached yet
+            # -- and it is the turn the caller judges. Detached: nothing waits
+            # on it and every failure path leaves today's behaviour.
+            if user_config.llm.provider == ServiceProviders.GROQ.value:
+                prewarm_prompt_cache(
+                    getattr(user_config.llm, "api_key", None),
+                    getattr(user_config.llm, "model", None),
+                    _vaani_prompt,
+                )
+
             # So a booked appointment reaches the saved lead record. Without
             # this the time is agreed on the call and then lost.
             if hasattr(engine, "attach_vaani_state"):
