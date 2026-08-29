@@ -91,9 +91,22 @@ def test_an_ordinary_answer_does_not_abandon_anything():
     """The guard must not fire on cooperative callers, or it drops good data."""
     st = state()
     ask(st)
-    for reply in ["రెండు వేలు", "నా పేరు రవి", "ఇల్లు", "సరే చెప్పండి"]:
+    # Deliberately NOT an amount. "రెండు వేలు" used to belong in this list, and
+    # now leaves still_need on purpose -- amounts.parse_amount reads it as
+    # ₹2,000 the moment it is said, which is the whole point of that module.
+    for reply in ["నా పేరు రవి", "ఇల్లు", "సరే చెప్పండి"]:
         triage.apply(st, reply)
     assert "monthly_bill" in st.still_need, f"still_need={st.still_need}"
+
+
+def test_an_amount_answers_the_bill_question_immediately():
+    """Run 274: "వన్ లాక్ అండి" answered twice and asked three times."""
+    st = state()
+    ask(st)
+    triage.apply(st, "వన్ లాక్ అండి")
+    assert st.known.get("monthly_bill") == "100000"
+    assert "monthly_bill" not in st.still_need, (
+        "he answered; asking again is the defect this fixes")
 
 
 def test_the_checklist_empties_rather_than_looping_forever():

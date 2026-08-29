@@ -19,7 +19,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 
-from api.services.vaani import booking
+from api.services.vaani import amounts, booking
 
 
 class Phase(Enum):
@@ -142,6 +142,14 @@ def _is_question(text: str) -> bool:
 # Fields that mean "agree a visit". These get concrete slots instead of a
 # yes/no question, because run 262 answered the yes/no perfectly and still left
 # nobody knowing when to turn up.
+MONEY_FIELDS = ("bill", "amount", "spend", "budget", "consumption")
+
+
+def _is_money_field(name: str) -> bool:
+    n = (name or "").lower()
+    return any(k in n for k in MONEY_FIELDS)
+
+
 BOOKING_FIELDS = ("assessment_agreed", "appointment", "callback", "visit",
                   "site_visit", "schedule")
 
@@ -196,6 +204,26 @@ class CallState:
         return [f for f in self.required_fields
                 if f not in self.known
                 and self.ask_counts.get(f, 0) >= self.MAX_ASKS_PER_FIELD]
+
+    def note_amount(self, text: str) -> bool:
+        """Record the bill the moment it is said, not a turn later.
+
+        Run 274: the caller said "వన్ లాక్ అండి" twice and was asked the same
+        question three times, because the amount was left to the asynchronous
+        extractor -- which answers a turn late and answered null anyway. Money
+        is structured; it is read here, synchronously, before the reply.
+        """
+        if not self.still_need or not _is_money_field(self.still_need[0]):
+            # Only while a bill is actually being asked for. Otherwise "మూడు
+            # లక్షలు" said in passing would overwrite a confirmed figure --
+            # the same class of bug that once booked an appointment from it.
+            return False
+        amount = amounts.parse_amount(text)
+        if amount is None:
+            return False
+        self.known[self.still_need[0]] = str(amount.rupees)
+        self.amount = amount
+        return True
 
     def note_booking(self, text: str) -> bool:
         """Record an appointment, but only if the caller actually named one.
@@ -275,6 +303,13 @@ class CallState:
     # given the same slot. Populated at call start; empty means "unknown", which
     # degrades to today's behaviour rather than blocking a booking.
     taken_slots: list = field(default_factory=list)
+    # The parsed bill, kept so the reply can react to its SIZE rather than just
+    # recording it. A factory owner quoting 50 lakhs and a household quoting
+    # 2,000 are not the same conversation.
+    amount: object = None
+    # One reaction per call. Repeating "that is a big bill" every turn is the
+    # opposite of sounding human.
+    reacted: bool = False
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -405,6 +440,42 @@ class CallState:
                 # three rules ran to 1,086 characters and took the LLM's first
                 # token from 0.22s to 0.655s -- total 1.27s to 2.10s on run 206.
                 # Same rules, said once.
+                # React to the SIZE of the bill, not just record it.
+                #
+                # A factory owner quoting 50 lakhs a month and a household
+                # quoting 2,000 are not the same conversation, and answering
+                # both with the same flat next-question is what makes this read
+                # as a form rather than a person. Run 269's caller said "మాది
+                # ఫ్యాక్టరీ" and got the identical script a household gets.
+                #
+                # Named bands, not a sliding scale: the model needs one clear
+                # instruction, and every extra clause here is re-read and
+                # re-billed on every turn (the state block is the uncached tail
+                # -- 1,086 chars once cost 0.43s per turn).
+                if self.amount is not None and not self.reacted:
+                    self.reacted = True
+                    rupees = getattr(self.amount, "rupees", 0)
+                    said = getattr(self.amount, "say", lambda: "")()
+                    # Bands set against real Indian monthly electricity bills,
+                    # not round numbers: 50,000/month is already a large
+                    # commercial or large-home bill, and 20 lakhs is a factory.
+                    if rupees >= 2_000_000:
+                        lines.append(
+                            f"THEIR BILL IS {said} -- very large, industrial "
+                            "scale. Say that is a significant bill and this is "
+                            "exactly the case solar pays back fastest on. Sound "
+                            "impressed, briefly, then continue.")
+                    elif rupees >= 50_000:
+                        lines.append(
+                            f"THEIR BILL IS {said} -- large. Acknowledge the "
+                            "savings are substantial at that level, in one "
+                            "clause, then continue.")
+                    elif rupees < 3_000:
+                        lines.append(
+                            f"THEIR BILL IS {said} -- small. Do NOT oversell. "
+                            "Be honest that savings scale with usage, stay warm, "
+                            "and continue.")
+
                 if self.asked:
                     lines.append(f"ALREADY SAID: {self.asked[-1][:60]!r} "
                                  "-- do not repeat it; say you could not hear.")

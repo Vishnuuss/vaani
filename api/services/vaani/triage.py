@@ -214,6 +214,10 @@ def apply(state, text: str) -> Triage:
             logger.info(f"triage: caller says they already answered "
                         f"{field_name!r}; moving on")
 
+    # Money, read deterministically the moment it is spoken.
+    if hasattr(state, "note_amount") and state.note_amount(text):
+        logger.info(f"triage: bill = {state.amount.rupees:,} ({state.amount.say()})")
+
     # A named time books the visit. Bare consent deliberately does not: see
     # CallState.note_booking and run 262.
     if hasattr(state, "note_booking") and state.note_booking(text):
