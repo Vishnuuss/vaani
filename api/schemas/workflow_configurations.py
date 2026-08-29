@@ -128,16 +128,27 @@ DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.45
 # followed by silence reads as a machine that has lost its place. The client
 # heard it immediately and described it as "aaa in the middle".
 #
-# The diagnosis named the fix, and the fix is now in place: a filler is not a
-# marker dropped at the start of a gap, it is cover HELD until the gap ends.
-# `filler_player.py` now streams, paced against a clock, and stops on the
-# reply's first audio frame -- so the caller hears speech from ~0.2s after they
-# finish, continuously, into the answer.
+# OFF, and staying off. Two designs, two live failures, both audible to the
+# client on the first call he made.
 #
-# On by default because the failure it replaces was a hole in the middle, and
-# the tests now assert the caller never hears one (longest silence < 0.40s while
-# covering). Set false per workflow to disable.
-DEFAULT_FILLERS_ENABLED = True
+#   v1, run 267:  one clip at the VAD stop, then 1.0-1.8s of silence before the
+#                 reply. "that aaa in the middle ... it is like scripted"
+#   v2, run 273:  continuous paced cover, stopping on the reply's first audio.
+#                 The caller heard the cover as a stray word and asked what it
+#                 was: "ఆ ఏంది మంచిది ఏంది అది?" -- what is this "మంచిది"?
+#
+# v2 fixed the hole and the fix worked; the tests still hold. The defect it
+# exposed is upstream of the timing entirely: a pre-recorded word played from a
+# clip does not sound like the sentence it precedes. It has different prosody,
+# it does not lead anywhere, and a caller notices a voice saying "మంచిది" at
+# them for no reason. Covering a gap convincingly needs speech generated as part
+# of the reply, not spliced in front of it -- which is a TTS-level change, not a
+# playback one.
+#
+# The machinery is kept because the measurement behind it stands: 0.72s of every
+# gap is silence and a human agent fills it. But it is not going back on a live
+# client call on a hunch. Enable per workflow only with a way to hear it first.
+DEFAULT_FILLERS_ENABLED = False
 
 
 class ExternalPBXFieldMapping(BaseModel):

@@ -226,20 +226,30 @@ class RealtimeFeedbackObserver(BaseObserver):
                     result=frame.result,
                 )
             )
-        # Handle TTFB metrics - capture LLM generation time only
+        # Handle TTFB metrics from EVERY service, not just the LLM.
+        #
+        # This used to read `if "LLM" in metric_data.processor`, which threw away
+        # the speech engine's timing before it reached the run log. The cost of
+        # that filter was two months of latency work done half-blind: every
+        # number quoted on this project -- including "TOTAL" in the run log,
+        # which is exactly endpoint+LLM to three decimals on all seven turns of
+        # run 273 -- excluded the time between the model's first token and the
+        # first sound on the line. The client heard three seconds where the log
+        # claimed 2.111s, and the missing second had nowhere to show up.
+        #
+        # Pipecat already measures it; nothing new is computed here. The filter
+        # is simply removed so TTS and STT arrive alongside the LLM and the
+        # budget adds up to what the caller actually waits.
         elif isinstance(frame, MetricsFrame):
-            # Check if this MetricsFrame contains TTFB data from an LLM processor
             for metric_data in frame.data:
-                if isinstance(metric_data, TTFBMetricsData):
-                    # Only send TTFB if it's from an LLM processor
-                    if metric_data.processor and "LLM" in metric_data.processor:
-                        await self._send_message(
-                            build_ttfb_metric_event(
-                                ttfb_seconds=metric_data.value,
-                                processor=metric_data.processor,
-                                model=metric_data.model,
-                            )
+                if isinstance(metric_data, TTFBMetricsData) and metric_data.processor:
+                    await self._send_message(
+                        build_ttfb_metric_event(
+                            ttfb_seconds=metric_data.value,
+                            processor=metric_data.processor,
+                            model=metric_data.model,
                         )
+                    )
         # Handle pipeline errors
         elif isinstance(frame, ErrorFrame):
             processor_name = str(frame.processor) if frame.processor else None

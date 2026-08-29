@@ -1367,10 +1367,25 @@ async def _run_pipeline_impl(
                     value = getattr(m, "ttfb", None)
                     if name and value is not None:
                         ttfbs[str(name)] = round(float(value), 4)
+                # The breakdown, and a total that includes the speech engine.
+                #
+                # `user_turn_secs + LLM` was being reported as "TOTAL" and it is
+                # not what the caller waits: it stops at the model's first token
+                # and ignores everything between that and the first sound on the
+                # line. Verified on run 273 -- TOTAL equalled endpoint+LLM to
+                # three decimals on all seven turns, while the client heard three
+                # seconds against a logged 2.111s.
+                llm_ttfb = sum(v for k, v in ttfbs.items() if "LLM" in k)
+                tts_ttfb = sum(v for k, v in ttfbs.items()
+                               if "TTS" in k or "Speech" in k)
+                endpoint = (round(breakdown.user_turn_secs, 4)
+                            if breakdown.user_turn_secs is not None else None)
                 payload = {
-                    "endpoint_secs": (
-                        round(breakdown.user_turn_secs, 4)
-                        if breakdown.user_turn_secs is not None else None),
+                    "endpoint_secs": endpoint,
+                    "llm_secs": round(llm_ttfb, 4) or None,
+                    "tts_secs": round(tts_ttfb, 4) or None,
+                    "heard_secs": (round(endpoint + llm_ttfb + tts_ttfb, 4)
+                                   if endpoint is not None else None),
                     "ttfb": ttfbs,
                 }
                 message = {"type": "rtf-latency-breakdown", "payload": payload}
