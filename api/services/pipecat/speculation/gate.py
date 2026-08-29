@@ -34,10 +34,15 @@ _TRIGGER_FRAMES = (LLMRunFrame, LLMContextFrame)
 class SpeculativeLLMGate(FrameProcessor):
     """Replays a pre-generated response instead of calling the LLM."""
 
-    def __init__(self, coordinator):
+    def __init__(self, coordinator, report=None):
         super().__init__()
         self._coordinator = coordinator
         self._last_user_text = ""
+        # Writes each turn's outcome into the run log. Speculation was enabled
+        # once before with no way to see whether it fired, which is how a 0% hit
+        # rate went unexplained for weeks -- and why the cause turned out to be
+        # a trigger bug rather than the traffic. It is not enabled again blind.
+        self._report = report
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -58,6 +63,22 @@ class SpeculativeLLMGate(FrameProcessor):
 
         await self.push_frame(frame, direction)
 
+    async def _record(self, outcome: str, final_text: str) -> None:
+        """Put the outcome where it can be read off a call, not just a log."""
+        if not self._report:
+            return
+        try:
+            stats = getattr(self._coordinator, "stats", None)
+            await self._report({"type": "rtf-speculation", "payload": {
+                "outcome": outcome,
+                "hits": getattr(stats, "hits", None),
+                "misses": getattr(stats, "misses", None),
+                "turns": getattr(stats, "turns", None),
+                "final_chars": len(final_text or ""),
+            }})
+        except Exception as e:
+            logger.debug(f"[speculation] could not record outcome: {e}")
+
     async def _safe_partial(self, text: str) -> None:
         try:
             await self._coordinator.on_partial(text)
@@ -76,9 +97,11 @@ class SpeculativeLLMGate(FrameProcessor):
             return False
 
         if not tokens:
+            await self._record("miss", final_text)
             return False
 
         logger.info("[speculation] replaying pre-generated response — LLM skipped")
+        await self._record("hit", final_text)
         await self.push_frame(LLMFullResponseStartFrame(), direction)
         for token in tokens:
             await self.push_frame(LLMTextFrame(token), direction)

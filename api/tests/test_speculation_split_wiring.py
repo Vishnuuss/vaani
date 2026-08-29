@@ -115,3 +115,57 @@ async def test_a_mismatch_lets_the_real_llm_run():
     await gate.process_frame(trigger, FrameDirection.DOWNSTREAM)
 
     assert trigger in pushed, "on a miss the trigger must reach the LLM"
+
+
+@pytest.mark.asyncio
+async def test_every_turn_reports_its_outcome():
+    """Speculation was enabled once before with no way to see whether it fired.
+
+    That is how a 0% hit rate went unexplained -- and the cause turned out to be
+    a trigger bug, not the traffic. It does not go on blind again.
+    """
+    recorded = []
+
+    async def report(message):
+        recorded.append(message)
+
+    llm, probe, gate, _ = _wire()
+    gate._report = report
+
+    for text in ("నా ఇల్లు", "నా ఇల్లు నాదే"):
+        await probe.process_frame(
+            InterimTranscriptionFrame(text, "user", ""), FrameDirection.DOWNSTREAM
+        )
+    await _settle()
+    await probe.process_frame(
+        TranscriptionFrame("నా ఇల్లు నాదే", "user", ""), FrameDirection.DOWNSTREAM
+    )
+    await gate.process_frame(LLMRunFrame(), FrameDirection.DOWNSTREAM)
+
+    assert recorded, "the turn produced no speculation record"
+    assert recorded[0]["type"] == "rtf-speculation"
+    assert recorded[0]["payload"]["outcome"] == "hit"
+
+
+@pytest.mark.asyncio
+async def test_a_miss_is_reported_too():
+    """A miss is the number that matters most -- it is what says the trigger is
+    wrong, which is exactly what was invisible last time."""
+    recorded = []
+
+    async def report(message):
+        recorded.append(message)
+
+    llm, probe, gate, _ = _wire()
+    gate._report = report
+
+    await probe.process_frame(
+        InterimTranscriptionFrame("నా ఇల్లు", "user", ""), FrameDirection.DOWNSTREAM
+    )
+    await _settle()
+    await probe.process_frame(
+        TranscriptionFrame("వేరే మాట", "user", ""), FrameDirection.DOWNSTREAM
+    )
+    await gate.process_frame(LLMRunFrame(), FrameDirection.DOWNSTREAM)
+
+    assert recorded and recorded[0]["payload"]["outcome"] == "miss"

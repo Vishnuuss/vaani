@@ -210,7 +210,8 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
     return injector, ReplyFilter(injector, filler_state=filler_state)
 
 
-def build_speculation_processors(workflow_graph, llm, context, has_recordings: bool):
+def build_speculation_processors(workflow_graph, llm, context,
+                                has_recordings: bool, report=None):
     """Build the (probe, gate) pair that overlaps the turn boundary.
 
     Extracted from run_pipeline so it can be unit tested. It was inlined once,
@@ -242,7 +243,7 @@ def build_speculation_processors(workflow_graph, llm, context, has_recordings: b
     )
     coordinator = SpeculationCoordinator(generate=generate)
     return SpeculationProbe(coordinator=coordinator), SpeculativeLLMGate(
-        coordinator=coordinator
+        coordinator=coordinator, report=report
     )
 
 
@@ -1242,7 +1243,8 @@ async def _run_pipeline_impl(
     ):
         try:
             speculation_probe, speculative_gate = build_speculation_processors(
-                workflow_graph, llm, context, has_recordings
+                workflow_graph, llm, context, has_recordings,
+                report=in_memory_logs_buffer.append,
             )
             logger.info("Speculative generation enabled")
         except Exception as e:
