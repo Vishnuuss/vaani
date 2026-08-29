@@ -93,11 +93,13 @@ async def _warm(api_key: str, model: str, system_prompt: str, base_url: str,
     # slow or merely far away: this server is in Mumbai and api.groq.com
     # resolves to Toronto, which would put a transcontinental hop on every turn
     # of every call. It has never been measured, so it has never been fixed.
-    server = 0.0
+    server = queue = compute = 0.0
     try:
         usage = (json.loads(body).get("usage") or {})
-        server = float(usage.get("total_time") or 0.0) + float(
-            usage.get("queue_time") or 0.0)
+        queue = float(usage.get("queue_time") or 0.0)
+        compute = (float(usage.get("prompt_time") or 0.0)
+                   + float(usage.get("completion_time") or 0.0))
+        server = queue + compute
     except Exception:
         pass
     network = max(0.0, wall - server)
@@ -107,6 +109,8 @@ async def _warm(api_key: str, model: str, system_prompt: str, base_url: str,
         try:
             await report({"type": "rtf-prewarm", "payload": {
                 "wall_secs": round(wall, 4),
+                "queue_secs": round(queue, 4),
+                "compute_secs": round(compute, 4),
                 "provider_secs": round(server, 4),
                 "network_secs": round(network, 4),
                 "prompt_chars": len(system_prompt),
@@ -133,7 +137,9 @@ BENCH_MODELS = ("openai/gpt-oss-20b",)
 # the provider's cache and therefore nearly free. That reasoning was about COST.
 # A cache read is not free in TIME, and this measures whether it is the term
 # that matters.
-BENCH_PROMPT_FRACTIONS = (1.0, 0.5, 0.25, 0.05)
+# Run 284 showed length does not predict the time, so the sweep now repeats
+# ONE size several times: the thing being measured is variance.
+BENCH_PROMPT_FRACTIONS = (1.0, 1.0, 1.0, 1.0, 1.0)
 
 
 async def _bench_one(session, api_key, model, system_prompt, base_url):
@@ -155,11 +161,19 @@ async def _bench_one(session, api_key, model, system_prompt, base_url):
     if resp.status != 200:
         return {"model": model, "error": body[:90]}
     usage = (json.loads(body).get("usage") or {})
+    # Queue and compute kept APART. Summing them hid the whole story on run 284:
+    # the same prompt on the same model, seconds apart, reported 0.080s and
+    # then 0.413s. Prompt length explained none of it, so the variance is either
+    # waiting for a worker or the worker itself, and one number cannot say which.
+    queue = float(usage.get("queue_time") or 0)
+    compute = (float(usage.get("prompt_time") or 0)
+               + float(usage.get("completion_time") or 0))
     return {
         "model": model,
         "wall_secs": round(wall, 4),
-        "provider_secs": round(float(usage.get("total_time") or 0)
-                               + float(usage.get("queue_time") or 0), 4),
+        "queue_secs": round(queue, 4),
+        "compute_secs": round(compute, 4),
+        "provider_secs": round(queue + compute, 4),
     }
 
 
