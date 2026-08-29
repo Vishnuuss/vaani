@@ -116,8 +116,20 @@ async def _warm(api_key: str, model: str, system_prompt: str, base_url: str,
 # be faster. Which of them is fast ENOUGH and good enough is not a guess to be
 # made from a datasheet -- it is measured here, on the real prompt, from the
 # machine that will actually call it.
-BENCH_MODELS = ("openai/gpt-oss-20b", "llama-3.3-70b-versatile",
-                "llama-3.1-8b-instant")
+BENCH_MODELS = ("openai/gpt-oss-20b",)
+
+# Prompt sizes to time, as a fraction of the live prompt.
+#
+# Run 281 killed the model-swap theory: gpt-oss-20b answered in 0.414s of
+# provider time against the 120b's 0.399s -- the smaller model is not faster
+# here. Both were processing the same 28,850-character prompt, which points at
+# the prompt rather than the model.
+#
+# Prompt size was dismissed earlier on the grounds that 85% of it is served from
+# the provider's cache and therefore nearly free. That reasoning was about COST.
+# A cache read is not free in TIME, and this measures whether it is the term
+# that matters.
+BENCH_PROMPT_FRACTIONS = (1.0, 0.5, 0.25, 0.05)
 
 
 async def _bench_one(session, api_key, model, system_prompt, base_url):
