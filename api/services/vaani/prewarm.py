@@ -111,6 +111,70 @@ async def _warm(api_key: str, model: str, system_prompt: str, base_url: str,
             pass
 
 
+# Candidates for the routine-turn model, measured against the live prompt on the
+# live server. gpt-oss-120b is what runs today; the rest are smaller and should
+# be faster. Which of them is fast ENOUGH and good enough is not a guess to be
+# made from a datasheet -- it is measured here, on the real prompt, from the
+# machine that will actually call it.
+BENCH_MODELS = ("openai/gpt-oss-20b", "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant")
+
+
+async def _bench_one(session, api_key, model, system_prompt, base_url):
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system_prompt},
+                     {"role": "user", "content": "."}],
+        "max_completion_tokens": MAX_TOKENS,
+    }
+    t0 = time.monotonic()
+    async with session.post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}",
+                 "Content-Type": "application/json"},
+        data=json.dumps(payload),
+    ) as resp:
+        body = await resp.text()
+    wall = time.monotonic() - t0
+    if resp.status != 200:
+        return {"model": model, "error": body[:90]}
+    usage = (json.loads(body).get("usage") or {})
+    return {
+        "model": model,
+        "wall_secs": round(wall, 4),
+        "provider_secs": round(float(usage.get("total_time") or 0)
+                               + float(usage.get("queue_time") or 0), 4),
+    }
+
+
+async def benchmark_models(api_key: str, system_prompt: str, report=None,
+                           base_url: str = "https://api.groq.com/openai/v1") -> list:
+    """Time the candidate models once, on the real prompt, from this server.
+
+    Runs at most once per call and is capped at one token each, so the cost is
+    a rounding error against the call itself. Failures are reported, not raised:
+    a model the account cannot reach is a fact worth recording, not an outage.
+    """
+    import aiohttp
+
+    out = []
+    timeout = aiohttp.ClientTimeout(total=TIMEOUT_S)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for model in BENCH_MODELS:
+            try:
+                out.append(await _bench_one(session, api_key, model,
+                                            system_prompt, base_url))
+            except Exception as e:
+                out.append({"model": model, "error": repr(e)[:90]})
+    logger.info(f"[bench] {out}")
+    if report:
+        try:
+            await report({"type": "rtf-model-bench", "payload": {"models": out}})
+        except Exception:
+            pass
+    return out
+
+
 def prewarm_prompt_cache(
     api_key: str | None,
     model: str | None,
@@ -118,6 +182,7 @@ def prewarm_prompt_cache(
     *,
     base_url: str = "https://api.groq.com/openai/v1",
     report=None,
+    bench: bool = False,
 ) -> asyncio.Task | None:
     """Fire the warming request and return immediately.
 
@@ -130,6 +195,10 @@ def prewarm_prompt_cache(
     async def run() -> None:
         try:
             await _warm(api_key, model, system_prompt, base_url, report)
+            if bench:
+                # After the warm-up, never before it: the live model's cache
+                # must be primed first, and the benchmark must not delay it.
+                await benchmark_models(api_key, system_prompt, report, base_url)
         except asyncio.CancelledError:
             raise
         except Exception as e:
