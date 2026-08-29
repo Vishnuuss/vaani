@@ -78,6 +78,16 @@ class ExtractionVariableDTO(BaseModel):
         description="Per-variable hint describing what to look for.",
         editor="textarea",
     )
+    ask: Optional[str] = spec_field(
+        default=None,
+        ui_type=PropertyType.string,
+        display_name="Spoken Question",
+        description=(
+            "The question to ASK the caller, in their own language and words. "
+            "Falls back to the extraction hint when empty."
+        ),
+        editor="textarea",
+    )
 
 
 class CustomHeaderDTO(BaseModel):

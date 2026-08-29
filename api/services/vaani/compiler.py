@@ -77,6 +77,39 @@ class Brief:
                 for q in self.questions]
 
 
+def spoken_question(variable) -> str:
+    """The words to SAY, which are not the words that describe the field.
+
+    Run 298, and the reason this function exists:
+
+        BOT   సరే, మీ నెలవారీ బిల్లు ఎంత?          how much is your monthly bill?
+        USER  ఏం బిల్లు అండి                       what bill?
+        BOT   మంచిది, మీ నెలవారీ బిల్లు ఎంత?       (asks the identical thing again)
+        USER  అది ఏం బిల్లు?                       WHAT bill?
+
+    The caller could not work out which bill was meant, twice, and the agent
+    could not hear the problem because the words it was reading out were never
+    written to be spoken. `extraction_variables[].prompt` is documented in the
+    DTO as the "Extraction Hint" -- "Monthly electricity bill in rupees" --
+    and Vaani was handing that English schema description to the model as the
+    question. The model then translated it live and dropped "electricity",
+    which is the one word the caller needed.
+
+    That is not a bill problem. Every field has it: "own house / apartment /
+    commercial" is a list of enum values, not a question, and asking a Telugu
+    caller a slash-separated English enum is how the agent ends up sounding
+    like a form.
+
+    So the two are separated. `ask` is what the caller hears, in their own
+    language, written by whoever knows the business. `prompt` stays what it
+    says it is -- a hint for the extractor -- and remains the fallback, so
+    every existing workflow behaves exactly as it does today.
+    """
+    if isinstance(variable, dict):
+        return variable.get("ask") or variable.get("prompt") or ""
+    return getattr(variable, "ask", "") or getattr(variable, "prompt", "") or ""
+
+
 def _read(*parts: str) -> str:
     path = LAYERS_DIR.joinpath(*parts)
     if not path.exists():

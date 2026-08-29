@@ -61,6 +61,7 @@ from api.services.vaani.filler_player import FillerPlayer, FillerState
 from api.services.vaani.prewarm import prewarm_prompt_cache
 from api.services.vaani import Brief as VaaniBrief
 from api.services.vaani import compile_prompt as compile_vaani_prompt
+from api.services.vaani.compiler import spoken_question
 from api.services.pipecat.speculation.llm_generator import make_llm_generator
 from api.services.pipecat.pre_call_fetch import execute_pre_call_fetch
 from api.services.pipecat.realtime_feedback_events import (
@@ -162,10 +163,7 @@ def compile_vaani_system_prompt(workflow_graph, *, workflow_name: str) -> str:
         )
         if not name:
             continue
-        ask = (
-            variable.get("prompt") if isinstance(variable, dict)
-            else getattr(variable, "prompt", "")
-        )
+        ask = spoken_question(variable)
         questions.append({"field": name, "ask": ask or name})
 
     brief = VaaniBrief(
@@ -200,9 +198,7 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
         )
         if not name:
             continue
-        ask = (
-            variable.get("prompt") if isinstance(variable, dict) else getattr(variable, "prompt", "")
-        )
+        ask = spoken_question(variable)
         questions.append({"field": name, "ask": ask or name})
 
     brief = VaaniBrief(business=workflow_name or "", questions=questions)

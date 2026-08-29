@@ -374,6 +374,31 @@ class CallState:
         """
         lines = [f"PHASE: {self.phase.value}", f"KNOWN: {self.known or '{}'}"]
 
+        # Run 298. The caller asked what bill was meant, and the agent explained:
+        #
+        #     "అది మీ ఇంటి నెలవారీ విద్యుత్ బిల్లు"   that is your HOUSE's monthly bill
+        #
+        # Nobody had said anything about a house. `property_type` was null and
+        # had not been asked; the man could have been ringing from a factory, a
+        # shop or a rented room. The model filled the gap because a fluent
+        # sentence wants a noun there, and an invented one reads as fluent.
+        #
+        # KNOWN above says what we have. It does not say that everything else is
+        # unknown, and a model reading a list of facts does not infer the
+        # absence of the others -- it infers the most ordinary case. So the
+        # absence is stated outright.
+        #
+        # Deliberately not a rule about houses. The same failure would put a
+        # city, a budget or a name into the agent's mouth just as readily, and a
+        # salesperson who invents the customer's situation has stopped listening
+        # to them -- which is the complaint this whole file exists to answer.
+        unknown = [f for f in self.required_fields if f not in self.known]
+        if unknown:
+            lines.append(
+                f"NOT TOLD YET: {unknown}. You do NOT know these. Never say or "
+                "imply a value for any of them -- not their property, not their "
+                "city, not their situation. Speak generally until they tell you.")
+
         # Any ending state MUST suppress the checklist. The 30-persona run showed
         # that simply listing STILL_NEED at the end of the context makes the model
         # ask for those fields -- even right after it agreed to remove the caller
