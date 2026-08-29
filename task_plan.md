@@ -10,8 +10,8 @@
 5. Runs on free startup credits (NVIDIA Inception / Google for Startups / AWS Activate / Azure).
 
 ## Next Step
-Phase 7.3 — make the disqualifier require an explicit negation, then place one
-verification call.
+One supervised call to verify Phases 7 and 8 together. Both are deployed
+(992b10d, app healthy) and neither has been exercised by a real call.
 
 ## Current Phase
 Phase 1
@@ -86,7 +86,7 @@ the caller's own utterance length. Real latency was never 2.4s.
 | Optimised PartialResponder/TOKEN-aggregation against an inflated metric | 1 | Metric was wrong; re-derived truth from raw timestamps |
 
 
-### Phase 7 — Run 312 defects: three ways a garbled word became a fact  (Status: in_progress)
+### Phase 7 — Run 312 defects: three ways a garbled word became a fact  (Status: code complete, awaiting deploy)
 
 Run 312 (WR-TEL-OUT-82803732, 51s) hit the 800ms target -- p50 TOTAL **0.774s**,
 best turn 0.640s -- and lost the lead anyway. Three defects, all the same shape:
@@ -99,7 +99,7 @@ confident fact instead of a question.
 | 7.2 | "on the factory" | "ఫ్యాక్టర్ పైన" / "మా ట్రాక్టర్ పైన" | `roof_available: false` | **disqualified and hung up** |
 | 7.3 | (a factory) | "అది ఒక థర్డ్ సెంటర్ యాక్చువల్ గా" | `property_type: commercial` | guessed, never asked |
 
-#### 7.1 — the plausibility gate was set too wide  (Status: pending)
+#### 7.1 — the plausibility gate was set too wide  (Status: complete)
 `amounts.MAX_PLAUSIBLE = 50_000_000` (5 crores). 2 crores passed it, so the
 `doubted` path -- which exists for exactly this and has worked since run 286 --
 never fired. The bound is the whole bug; the machinery below it is fine.
@@ -108,7 +108,7 @@ Also: "వేలు" (thousands) -> "కోట్లు" (crores) is a specific,
 error on Telugu scale words, and it is a 10,000x error from one syllable. A
 generic "please confirm" wastes a turn. Ask the scale directly.
 
-#### 7.2 — a boolean went false with no negation anywhere  (Status: pending)
+#### 7.2 — a boolean went false with no negation anywhere  (Status: complete)
 Nothing in "ఎక్కడండి ట్రాక్టర్ పైన మా ట్రాక్టర్ పైన" is a "no". `మా X పైన`
 ("on our X") is an AFFIRMATIVE -- he is saying where the roof is. The extractor
 is told "never infer or guess", but a boolean field invites exactly that: the
@@ -119,7 +119,7 @@ said **"మీరు చెప్పినది బాగా వినిపి
 so out loud, and then ended the call on it. That is a lost lead, not a
 qualification.
 
-#### 7.3 — same class, on a category field  (Status: pending)
+#### 7.3 — same class, on a category field  (Status: complete)
 `property_type: commercial` from "థర్డ్ సెంటర్". Right answer by luck. The rule
 must be one rule, not three: **no fact is recorded from an utterance the agent
 could not parse.**
@@ -128,3 +128,32 @@ could not parse.**
 - `pytest api/tests -k "vaani or telugu"` stays green, plus new cases per defect.
 - One live call replaying run 312's exact three answers.
 - Latency must not regress past **0.774s p50** (run 312, measured).
+
+#### Result (29 Aug, 17:00)
+Committed as `61d674c` on `dograh-vapi`. 137 synchronous Vaani tests passing,
+26 of them new and written from run 312's transcript. NOT deployed -- the push
+to the `vaani` remote was blocked by the permission classifier.
+
+Latency, separately, is DONE: run 312 measured **0.774s p50, best turn 0.640s**
+against the 700-800ms target, after `stt_finalisation_budget_secs` 0.45 -> 0.20
+removed a dead 0.250s fallback timer that was firing on every turn.
+
+
+### Phase 8 — Run 314: customer satisfaction, not latency  (Status: deployed, unverified)
+
+Run 314 hit p50 0.829s and lost the lead anyway. Nothing here is a speed problem.
+
+| # | Defect | Fix | Status |
+|---|---|---|---|
+| 8.1 | `customer_name: "ఉమ్ భాస్కర్"` -- the agent called him Mr. Um Bhaskar | `strip_fillers` on every extracted value, edges only | complete |
+| 8.2 | Three deferrals, closing question asked twice near-verbatim with "please" | DEFERRAL class in triage; one deferral after slots were offered ends warmly | complete |
+| 8.3 | Apologised for mishearing the CITY, asked about the PROPERTY; stored "సంతై" | model's own apology raises `misheard_last_turn`; one state-block line | complete |
+| 8.4 | "రేపు ఉదయం ten oclock", and "four oclockకి" | "ten గంటలకు"; English number kept, per the client | complete |
+
+Not a defect: turn 5's 6.3s total is the caller pausing after "ఉమ్" and the
+agent waiting. That is section 4.1 working.
+
+#### Result (29 Aug, 21:50)
+`992b10d`, pushed to the `vaani` remote and deployed. 400 synchronous tests
+passing, 39 new. The one failure in `test_reply_sanitizer.py` is pre-existing,
+confirmed by stashing rather than assumed.
