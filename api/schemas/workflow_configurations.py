@@ -107,7 +107,9 @@ DEFAULT_LLM_HEDGE = 3
 # who is complaining about quality.
 DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.45
 
-# OFF. Measured on run 267 and switched off the same night it shipped.
+# BACK ON, after the design was corrected. Read the history before changing it.
+#
+# It was switched off the night it shipped, on this evidence:
 #
 # The idea was sound: 0.92s of every gap is silence, so put a short "సరే" into
 # it the moment the caller stops. The implementation fired the filler at the VAD
@@ -126,12 +128,16 @@ DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.45
 # followed by silence reads as a machine that has lost its place. The client
 # heard it immediately and described it as "aaa in the middle".
 #
-# The feature is kept rather than deleted because the diagnosis points at a
-# fixable design: a filler has to land LATE in the gap, not at the start of it --
-# played only once the reply is known to be slow, so what follows it is the
-# answer rather than more waiting. That needs a real call to verify, so it stays
-# off until then.
-DEFAULT_FILLERS_ENABLED = False
+# The diagnosis named the fix, and the fix is now in place: a filler is not a
+# marker dropped at the start of a gap, it is cover HELD until the gap ends.
+# `filler_player.py` now streams, paced against a clock, and stops on the
+# reply's first audio frame -- so the caller hears speech from ~0.2s after they
+# finish, continuously, into the answer.
+#
+# On by default because the failure it replaces was a hole in the middle, and
+# the tests now assert the caller never hears one (longest silence < 0.40s while
+# covering). Set false per workflow to disable.
+DEFAULT_FILLERS_ENABLED = True
 
 
 class ExternalPBXFieldMapping(BaseModel):
