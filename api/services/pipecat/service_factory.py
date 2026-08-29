@@ -87,6 +87,10 @@ from pipecat.services.openai.tts import OpenAITTSService, OpenAITTSSettings
 from pipecat.services.openrouter.llm import OpenRouterLLMService, OpenRouterLLMSettings
 from pipecat.services.rime.tts import RimeTTSService, RimeTTSSettings
 from pipecat.services.sarvam.llm import SarvamLLMService, SarvamLLMSettings
+from api.services.vaani.sarvam_realtime_stt import (
+    MODEL as REALTIME_MODEL,
+    SarvamRealtimeSTTService,
+)
 from pipecat.services.sarvam.stt import SarvamSTTService, SarvamSTTSettings
 from pipecat.services.sarvam.tts import SarvamTTSService, SarvamTTSSettings
 from pipecat.services.smallest.stt import SmallestSTTService, SmallestSTTSettings
@@ -419,6 +423,19 @@ def create_stt_service(
         else:
             # Unmapped BCP-47 codes pass through; Sarvam accepts them per https://docs.sarvam.ai/api-reference-docs/speech-to-text/transcribe
             pipecat_language = language
+        # The realtime endpoint is a different protocol, not a different model
+        # name on the same one -- pipecat's Sarvam service speaks the streaming
+        # endpoint, which has no partial path and measured 0.373s to first word
+        # against the realtime endpoint's 0.121s on the same recordings.
+        # Selected by model so switching is a config change with a one-command
+        # revert, and so every existing workflow is untouched.
+        if user_config.stt.model == REALTIME_MODEL:
+            return SarvamRealtimeSTTService(
+                api_key=user_config.stt.api_key,
+                language=language if language and language != "unknown" else "te-IN",
+                sample_rate=audio_config.transport_in_sample_rate,
+                ttfs_p99_latency=stt_finalisation_budget_secs,
+            )
         return SarvamSTTService(
             api_key=user_config.stt.api_key,
             settings=SarvamSTTSettings(

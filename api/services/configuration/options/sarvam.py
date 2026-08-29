@@ -63,7 +63,11 @@ SARVAM_LANGUAGES = (
     "te-IN",
     "as-IN",
 )
-SARVAM_STT_MODELS = ("saarika:v2.5", "saaras:v3")
+SARVAM_STT_MODELS = ("saarika:v2.5", "saaras:v3", "saaras:v3-realtime")
+# saaras:v3-realtime is served by a DIFFERENT endpoint and is handled by
+# api/services/vaani/sarvam_realtime_stt.py rather than pipecat's Sarvam
+# service. It is the only one of the three that emits partial transcripts,
+# and the only one measured under 0.2s to first word on Telugu phone audio.
 # saarika:v2.5 language codes (unknown = auto-detect)
 SARVAM_STT_LANGUAGES_V25 = (
     "unknown",
