@@ -230,3 +230,50 @@ def test_the_forest_never_makes_a_turn_slower():
     a = TeluguTurnAnalyzer(sample_rate=SR, params=TeluguTurnParams(stop_secs=0.4))
     feed(a, speech(0.8), True)
     assert feed(a, silence(0.5), False) == EndOfTurnState.COMPLETE
+
+
+# --- run 287: it ended the turn on a fragment ---------------------------------
+#
+#     05:57:51.624  CALLER  మాది.                  <- drawing breath
+#     05:57:52.842  AGENT   సరే, మీరు              <- starts talking
+#     05:57:53.240  CALLER  ఇండస్ట్రీ ఉంది ఒకటి.   <- he was mid-sentence
+#
+# A one-word fragment trails off, and trailing off is exactly the prosody the
+# model reads as "finished". Short utterances are where that signal is least
+# reliable and where being wrong is most obvious to the caller.
+
+
+def test_a_short_fragment_needs_near_certainty():
+    """The bar rises for fragments, so an ordinary-confidence score cannot end
+    a turn the caller had not finished."""
+    from api.services.vaani.telugu_turn import SHORT_TURN_THRESHOLD
+    a = analyzer(threshold=0.80)
+    feed(a, speech(0.3), True)          # a single short word
+    assert a._bar() == SHORT_TURN_THRESHOLD
+    assert a._bar() > 0.80, "a fragment must be harder to end on than a sentence"
+
+
+def test_a_full_sentence_keeps_the_normal_bar():
+    a = analyzer(threshold=0.80)
+    feed(a, speech(1.2), True)
+    assert a._bar() == 0.80, "a real answer must not be made harder to end"
+
+
+def test_a_one_word_answer_can_still_end_a_turn():
+    """"ఉంది" and "సరే" are complete Telugu answers, and latency_budget.yaml
+    sets min_turn_words to 1 on purpose. The bar is raised, not closed."""
+    a = analyzer(stop_secs=5.0, threshold=0.0)
+    feed(a, speech(0.3), True)
+    # An overwhelmingly confident model still ends it, fragment or not.
+    a._forest = None
+    a._mean = np.zeros(16); a._scale = np.ones(16)
+    a._coef = np.zeros(16); a._intercept = 50.0        # p ~ 1.0
+    state = feed(a, silence(MIN_SILENCE_MS / 1000 + 0.06), False)
+    assert state == EndOfTurnState.COMPLETE
+
+
+def test_the_fragment_rule_never_delays_past_the_timeout():
+    """Raising the bar must not be able to hang a turn open."""
+    a = analyzer(stop_secs=0.4, threshold=1.1)
+    feed(a, speech(0.3), True)
+    assert feed(a, silence(0.5), False) == EndOfTurnState.COMPLETE

@@ -85,6 +85,33 @@ WINDOW_S = 1.5
 # a verdict is available the moment the VAD would otherwise start waiting.
 MIN_SILENCE_MS = 120
 
+# A turn shorter than this is treated as a fragment, not an answer, and needs
+# near-certainty before it may end a turn.
+#
+# Run 287, with timestamps:
+#
+#     05:57:51.624  CALLER  మాది.                  <- drawing breath
+#     05:57:52.842  AGENT   సరే, మీరు              <- starts talking
+#     05:57:53.240  CALLER  ఇండస్ట్రీ ఉంది ఒకటి.   <- he was mid-sentence
+#
+#     05:57:37.695  CALLER  అదే.
+#     05:57:39.193  AGENT   సరే, వినిపించలేదు.
+#     05:57:39.589  CALLER  కరెంట్ బిల్లు 60 క్రోర్స్ వస్తుంది.
+#
+# Both are one-word fragments followed by the real answer. The detector was
+# confident enough to end the turn on them, because "మాది" prosodically looks
+# like an ending -- it trails off, which is exactly the feature the model leans
+# on. Short utterances are where that feature is least reliable and where being
+# wrong is most obvious to the caller.
+#
+# One-word turns still have to work: "ఉంది" (yes) and "సరే" are complete Telugu
+# answers, and latency_budget.yaml sets min_turn_words to 1 deliberately. So
+# this does not forbid them -- it raises the bar for them.
+MIN_CONFIDENT_TURN_S = 0.65
+
+# Near-certainty, for those short turns only.
+SHORT_TURN_THRESHOLD = 0.995
+
 
 def _f0_track(x: np.ndarray, sr: int, frame: int = 256) -> np.ndarray:
     """Autocorrelation pitch track; zero where unvoiced.
@@ -288,6 +315,21 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
     def speech_triggered(self) -> bool:
         return self._speech_triggered
 
+    @property
+    def _speech_secs(self) -> float:
+        """How much audio this turn holds, silence included."""
+        return sum(a.size for _, a in self._buffer) / max(1, self._rate)
+
+    def _bar(self) -> float:
+        """The confidence required to end THIS turn.
+
+        Higher for fragments. A trailing-off one-word utterance is the model's
+        weakest case and the caller's most noticeable one.
+        """
+        if self._speech_secs < MIN_CONFIDENT_TURN_S:
+            return max(self._params.threshold or 0.0, SHORT_TURN_THRESHOLD)
+        return self._params.threshold
+
     def _probability(self) -> float | None:
         """How finished the caller sounds, from the tail of what they said."""
         if not self.enabled or not self._buffer:
@@ -335,10 +377,11 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             p = self._probability()
             if p is not None:
                 self._last_probability = p
-                if p >= self._params.threshold:
+                if p >= self._bar():
                     logger.debug(
                         f"[telugu-turn] finished, p={p:.2f} after "
-                        f"{self._silence_ms:.0f}ms of silence"
+                        f"{self._silence_ms:.0f}ms of silence "
+                        f"({self._speech_secs:.2f}s of speech)"
                     )
                     self._clear(EndOfTurnState.COMPLETE)
                     return EndOfTurnState.COMPLETE
@@ -352,7 +395,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
 
     async def analyze_end_of_turn(self) -> tuple[EndOfTurnState, None]:
         p = self._probability() if self.enabled else None
-        if p is not None and p >= self._params.threshold:
+        if p is not None and p >= self._bar():
             self._clear(EndOfTurnState.COMPLETE)
             return EndOfTurnState.COMPLETE, None
         return EndOfTurnState.INCOMPLETE, None
