@@ -75,6 +75,55 @@ SPOKEN: tuple[tuple[str, str], ...] = (
     ("ప్రారంభించ", "స్టార్ట్ చేయ"),
 )
 
+# "ఐదు గంట" -> "ఐదు గంటలు". Telugu marks the plural on the noun, and a count
+# above one takes it: ఒక గంట (one hour) is right, ఐదు గంట is not. Run 305 read
+# out "ఉదయం తొమ్మిది గంట, మధ్యాహ్నం ఒక గంట, లేదా సాయంత్రం ఐదు గంట" -- the middle
+# one correct by accident and the other two wrong.
+#
+# ఒక / one is excluded rather than special-cased away, because it is the one
+# count that genuinely takes the singular.
+_NUMERALS_PLURAL = (
+    "రెండు|మూడు|నాలుగు|ఐదు|ఆరు|ఏడు|ఎనిమిది|తొమ్మిది|పది|పదకొండు|పన్నెండు|"
+    "టు|త్రీ|ఫోర్|ఫైవ్|సిక్స్|సెవెన్|ఎయిట్|నైన్|టెన్|"
+    r"two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+")
+_HOURS = re.compile(rf"({_NUMERALS_PLURAL})(\s+)గంట(కు|కి)?(?![ల])")
+
+
+def _hours(text: str) -> str:
+    def fix(m):
+        case = m.group(3)
+        noun = "గంటలకు" if case else "గంటలు"
+        return f"{m.group(1)}{m.group(2)}{noun}"
+    return _HOURS.sub(fix, text)
+
+
+# "విష్ణు అండి" -> "విష్ణు గారు".
+#
+# అండి is a sentence-final politeness particle -- it goes after a VERB, closing
+# what you just said ("చెప్పండి", "ఉందండి"). The particle that goes after a
+# NAME is గారు. "విష్ణు అండి" is not merely informal, it is wrong, and a Telugu
+# speaker hears it immediately: run 305's agent said it four times.
+#
+# Detected structurally rather than from a list of names, which there could
+# never be: a token that is followed by అండి and is NOT itself a Telugu word
+# ending in a verb suffix is being addressed, not spoken to. The safer and
+# narrower test used here is the one the caller supplies -- `spoken()` takes the
+# names in play and rewrites only those, so an ordinary "చెప్పండి" is untouched
+# because it is one token, not two.
+_ANDI = "అండి"
+
+
+def _names(text: str, names: tuple[str, ...]) -> str:
+    for name in names:
+        name = (name or "").strip()
+        if not name:
+            continue
+        text = text.replace(f"{name} {_ANDI}", f"{name} గారు")
+        text = text.replace(f"{name}{_ANDI}", f"{name} గారు")
+        text = text.replace(f"{name} గారు అండి", f"{name} గారు")
+    return text
+
+
 # "eight నుండి ten గంటల వరకు" -> "eight to ten గంటలు".
 #
 # నుండి ("from") is a perfectly ordinary word -- "Hyderabad నుండి" is right --
@@ -91,11 +140,18 @@ def _ranges(text: str) -> str:
     return _RANGE.sub(lambda m: f"{m.group(1)} to {m.group(2)} {m.group(3)}లు", text)
 
 
-def spoken(text: str) -> str:
-    """Rewrite one piece of generated speech into the register people use."""
+def spoken(text: str, names: tuple[str, ...] = ()) -> str:
+    """Rewrite one piece of generated speech into the register people use.
+
+    `names` are the people in the conversation -- the caller, usually -- so
+    "విష్ణు అండి" can be corrected to "విష్ణు గారు" without a list of every
+    Telugu name in existence.
+    """
     if not text:
         return text
-    out = _ranges(text)
+    out = _hours(_ranges(text))
+    if names:
+        out = _names(out, names)
     for literary, said in SPOKEN:
         if literary in out:
             out = out.replace(literary, said)

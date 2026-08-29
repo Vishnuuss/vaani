@@ -76,3 +76,45 @@ def test_a_phrase_split_across_stream_fragments_is_still_corrected():
     out = "".join(s.feed(part) for part in ("సౌర ", "శక్తి ", "చాలా మంచిది.")) + s.finish()
     assert "సోలార్" in out
     assert "సౌర శక్తి" not in out
+
+
+# --- streaming safety ------------------------------------------------------
+
+def test_a_word_is_not_rewritten_while_it_is_still_arriving():
+    """The bug the colon test caught.
+
+    Tokens arrive one character at a time. Mid-stream the buffer ends
+    "...పది గంట", which looks like a bare singular and was being corrected to
+    గంటలు -- and then "లకు" arrived and the caller heard "గంటలులకు".
+    """
+    text = "సమయం: రేపు ఉదయం పది గంటలకు."
+    s = ReplySanitizer()
+    out = "".join(s.feed(ch) for ch in text) + s.finish()
+    assert out == text
+
+
+def test_the_plural_is_still_fixed_when_the_word_really_is_finished():
+    s = ReplySanitizer()
+    out = "".join(s.feed(ch) for ch in "సాయంత్రం ఐదు గంట.") + s.finish()
+    assert "ఐదు గంటలు" in out
+
+
+def test_one_hour_keeps_the_singular():
+    """ఒక గంట is correct Telugu; only counts above one take the plural."""
+    assert spoken("మధ్యాహ్నం ఒక గంట") == "మధ్యాహ్నం ఒక గంట"
+
+
+def test_a_name_takes_garu_not_andi():
+    """అండి is a sentence-final particle and belongs after a verb. The particle
+    that follows a NAME is గారు; run 305 said "విష్ణు అండి" four times."""
+    assert spoken("మంచిది విష్ణు అండి, చెప్పండి", names=("విష్ణు",)) == \
+        "మంచిది విష్ణు గారు, చెప్పండి"
+
+
+def test_andi_after_an_ordinary_verb_is_untouched():
+    assert spoken("ఆ చెప్పండి", names=("విష్ణు",)) == "ఆ చెప్పండి"
+
+
+def test_no_name_known_yet_changes_nothing():
+    line = "మంచిది అండి, చెప్పండి"
+    assert spoken(line) == line

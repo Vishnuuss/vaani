@@ -162,7 +162,7 @@ class ReplyFilter(FrameProcessor):
         # to open with "సరే"/"మంచిది", and the filler has usually just said one
         # of those -- without this the caller hears the same word twice.
         self._filler_state = filler_state
-        self._sanitizer = ReplySanitizer()
+        self._sanitizer = ReplySanitizer(self._caller_names())
         self._spoken = ""
         self._blocked = False
         # Survives across responses: repetition is a property of the CALL, not
@@ -174,6 +174,18 @@ class ReplyFilter(FrameProcessor):
         # అయిపోతుంది". The unit tests missed it because they build this object
         # with __new__ and set the fields by hand, so __init__ never ran.
         self._said: list[str] = []
+
+
+    def _caller_names(self) -> tuple[str, ...]:
+        """Whoever the agent is on the phone to, if it has been told yet.
+
+        Only used to put గారు after a name instead of అండి, so an empty tuple
+        early in the call is correct rather than a gap: before the name is
+        known the agent has no name to get wrong.
+        """
+        state = getattr(self._injector, "state", None)
+        name = (getattr(state, "known", {}) or {}).get("customer_name", "")
+        return (str(name).strip(),) if name else ()
 
     def _gate(self, candidate: str) -> str:
         """Judge text BEFORE it is spoken; substitute rather than log.
@@ -294,7 +306,10 @@ class ReplyFilter(FrameProcessor):
                     # The question was really put to the caller. Only now does
                     # it count against that field's two-ask budget.
                     self._injector.state.commit_ask()
-            self._sanitizer = ReplySanitizer()
+            # Rebuilt per reply on purpose: the caller's name is
+            # usually learned halfway through the call, so it is
+            # read fresh rather than captured at construction.
+            self._sanitizer = ReplySanitizer(self._caller_names())
             self._spoken = ""
             self._blocked = False
             await self.push_frame(frame, direction)

@@ -286,6 +286,38 @@ class CallState:
         self.appointment_iso = when.isoformat()
         return True
 
+    def offer_line(self) -> str:
+        """The two times, in words, ready to be put to the caller.
+
+        Every branch that mentions offering a time uses this. Run 305 is what
+        happens otherwise: the caller said "ఆ ఉంది" (yes, I have time), which
+        set `buying_signal`, and that branch read
+
+            "CALLER IS READY TO BOOK. Stop qualifying. Offer a specific time
+             and close."
+
+        -- an instruction to name a time, with no time in it. The block that
+        holds the real slots sat further down the same elif chain and was never
+        reached. So the model invented them, and then invented different ones
+        twice more:
+
+            రేపు సాయంత్రం ఐదు గంటలకు లేదా శుక్రవారం ఉదయం పది గంటలకు
+            రేపు సాయంత్రం ఐదు, శుక్రవారం ఉదయం పది, లేదా శనివారం మధ్యాహ్నం మూడు
+            ఉదయం తొమ్మిది, మధ్యాహ్నం ఒక గంట, లేదా సాయంత్రం ఐదు
+
+        Three different menus in twenty seconds, none of them from the booking
+        system, and the slot the caller finally chose existed nowhere. A
+        confirmed appointment nobody can honour is worse than no appointment:
+        the customer waits in and the vendor never comes.
+        """
+        if not self.offered:
+            self.offered = booking.offer_slots(taken=self.taken_slots)
+        first, second = self.offered
+        return (f'OFFER EXACTLY THESE TWO TIMES, both of them, in these words: '
+                f'"{first.say()}" or "{second.say()}". Offer nothing else and '
+                "invent no other time. THEY MUST NAME WHICH ONE -- a bare yes "
+                "is not a booking.")
+
     def note_reschedule(self, text: str) -> bool:
         """The caller wanting a different time after one is already booked.
 
@@ -473,13 +505,18 @@ class CallState:
         elif self.disqualified:
             lines.append("STILL_NEED: [] -- DISQUALIFIED. Do not ask anything "
                          "further and do not sell. Close warmly in one sentence.")
+        elif self.next_step_agreed and not self.appointment_iso:
+            # Agreeing to a visit is not a visit. Ending here leaves the vendor
+            # with a lead and no time to turn up at, so the times come first.
+            lines.append("STILL_NEED: [] -- THEY AGREED TO THE VISIT but no "
+                         "time is fixed yet. " + self.offer_line())
         elif self.next_step_agreed:
             lines.append("STILL_NEED: [] -- NEXT STEP IS AGREED. Do not ask "
                          "anything further. Thank them and end the call NOW. "
                          "Remaining details are collected at the visit.")
         elif self.buying_signal:
             lines.append("STILL_NEED: [] -- CALLER IS READY TO BOOK. Stop "
-                         "qualifying. Offer a specific time and close.")
+                         "qualifying. " + self.offer_line())
         elif self.appointment_iso:
             # Booked. Everything else is now a reason to lose it.
             when = booking.Slot(datetime.fromisoformat(self.appointment_iso))
@@ -505,7 +542,8 @@ class CallState:
         elif self.no_more_questions:
             lines.append("STILL_NEED: [] -- THE CALLER HAS ASKED YOU TO STOP "
                          "ASKING QUESTIONS. Ask nothing at all. Answer what "
-                         "they raised, or offer a time. Nothing else.")
+                         "they raised, or offer a time. Nothing else. "
+                         + self.offer_line())
         elif _is_question(self.last_user_text):
             # THE CHECKLIST IS SUPPRESSED, and that is the entire point.
             #
@@ -543,17 +581,10 @@ class CallState:
                 # clean "yes", and stored `assessment_agreed: true` with no day
                 # and no time -- so the vendor had nothing to act on and the
                 # caller had been told a time that existed only in a transcript.
-                if not self.offered:
-                    self.offered = booking.offer_slots(taken=self.taken_slots)
-                first, second = self.offered
+                lines.append(self.offer_line())
                 lines.append(
-                    f'OFFER EXACTLY THESE TWO TIMES, both of them, in these '
-                    f'words: "{first.say()}" or "{second.say()}". '
-                    "Offer nothing else and invent no other time.")
-                lines.append(
-                    "THEY MUST NAME WHICH ONE. If they only say yes, సరే or "
-                    "బాగుంటుంది without naming a time, that is NOT a booking -- "
-                    "ask which of the two, and do not choose for them.")
+                    "If they only say yes, సరే or బాగుంటుంది without naming a "
+                    "time, ask WHICH of the two. Do not choose for them.")
                 self.pending_ask = nxt
             elif nxt and self.questions.get(nxt):
                 lines.append(f'NEXT QUESTION TO ASK: "{self.questions[nxt]}"')

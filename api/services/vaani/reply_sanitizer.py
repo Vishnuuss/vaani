@@ -86,7 +86,15 @@ HOLDBACK = 24
 class ReplySanitizer:
     """Incrementally cleans one reply. Construct one per LLM response."""
 
-    def __init__(self) -> None:
+    def __init__(self, names: tuple[str, ...] = ()) -> None:
+        """`names` are the people in the conversation.
+
+        Needed because "విష్ణు అండి" can only be corrected to "విష్ణు గారు" by
+        something that knows విష్ణు is a name. అండి is a sentence-final particle
+        and belongs after a verb; గారు is the one that goes after a name, and
+        run 305 said the wrong one four times.
+        """
+        self._names = tuple(n for n in names if n)
         self._buffer = ""
         # Discarded text is still accumulated, because the mode has to be read
         # out of it and a streamed marker arrives one character at a time.
@@ -118,11 +126,7 @@ class ReplySanitizer:
 
     def _drain(self, *, final: bool) -> str:
         self._buffer = self._strip_modes(self._buffer)
-        # Register is fixed on the BUFFER, before anything is released, so a
-        # word can never be half-spoken in one register and half in the other.
-        # Safe here because HOLDBACK (24 chars) already retains a tail longer
-        # than any phrase in the table, so no match ever straddles the split.
-        self._buffer = spoken(self._buffer)
+        self._buffer = self._register(self._buffer, final=final)
 
         cut = ROLE_LABEL_RE.search(self._buffer)
         if cut:
@@ -163,6 +167,32 @@ class ReplySanitizer:
             return ""
         out, self._buffer = self._buffer[:-HOLDBACK], self._buffer[-HOLDBACK:]
         return out
+
+    def _register(self, text: str, *, final: bool) -> str:
+        """Fix the spoken register, but only on words that are finished.
+
+        The rewrite cannot run on the raw buffer, and the reason is a bug the
+        existing colon test caught within the hour. Tokens arrive one character
+        at a time, so mid-stream the buffer ends "...పది గంట" -- at which point
+        గంట looks like a bare singular and is corrected to గంటలు. The remaining
+        "లకు" then arrives and the caller hears "గంటలులకు", a word that exists
+        in no language.
+
+        HOLDBACK does not help: it stops a marker being released half-scanned,
+        but this match is INSIDE the retained tail and is wrong only because
+        more text is coming.
+
+        So the buffer is split at the last whitespace and only the completed
+        words are rewritten. A trailing fragment is left exactly as it is until
+        something follows it, and on the final drain everything is rewritten
+        because nothing more is coming.
+        """
+        if final:
+            return spoken(text, self._names)
+        cut = max(text.rfind(" "), text.rfind(chr(10)))
+        if cut < 0:
+            return text
+        return spoken(text[:cut], self._names) + text[cut:]
 
     def _discard(self, text: str) -> None:
         """Bank text we will not speak, and mine it for the mode.
