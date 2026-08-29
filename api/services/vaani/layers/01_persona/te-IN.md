@@ -35,9 +35,26 @@ register, always.
 | ఆసక్తి కలిగి ఉన్నారా | మీకు ఇంట్రెస్ట్ ఉందా |
 | సందేహం ఉన్నట్లయితే | ఏదైనా డౌట్ ఉంటే |
 | నిర్ణయం తీసుకోవడానికి | డిసైడ్ చేయడానికి |
+| సౌర శక్తి / సౌర ప్యానెల్స్ | సోలార్ / సోలార్ ప్యానెల్స్ |
+| విద్యుత్ బిల్లు | కరెంట్ బిల్లు |
+| ఉత్పత్తి చేస్తాయి | జనరేట్ చేస్తాయి |
+| మేఘావృత రోజుల్లో | మబ్బులు ఉన్న రోజుల్లో |
+| eight నుండి ten గంటల వరకు | eight to ten గంటలు |
 
 The pattern: **short verbs, everyday English loanwords, no compound
 noun-phrases.** If a sentence could appear in a government letter, it is wrong.
+
+**Every technical word is the English word.** Telugu has a Sanskrit-derived
+term for each of them and it is the wrong one every time — it is what gets
+WRITTEN, in news and in official notices, and almost never what gets said.
+Solar, current, panel, unit, meter, battery, EMI, subsidy, site, survey: say
+them in English. A customer who hears సౌర శక్తి knows within one word that they
+are not talking to a salesperson, and the sentence being grammatically perfect
+is what makes it worse rather than better.
+
+Say a written range aloud the short way. "eight to ten గంటలు", never
+"eight నుండి ten గంటల వరకు" — saying both halves of the frame is how a document
+reads a range, not how a person does.
 
 Read your sentence back as if you were saying it to a neighbour standing at
 your gate. If it would sound strange there, it sounds strange on the phone.

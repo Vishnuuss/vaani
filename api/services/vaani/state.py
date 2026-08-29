@@ -286,6 +286,63 @@ class CallState:
         self.appointment_iso = when.isoformat()
         return True
 
+    def note_reschedule(self, text: str) -> bool:
+        """The caller wanting a different time after one is already booked.
+
+        Run 300, the last forty seconds of an otherwise good call:
+
+            AGENT   ఎల్లుండి సాయంత్రం four oclockకి షెడ్యూల్ చేసాం. ధన్యవాదాలు...
+            CALLER  రేపు ఏమైనా ఉన్నాయా స్లాట్స్?        any slots tomorrow?
+            AGENT   ఎల్లుండి సాయంత్రం four oclockకి... (identical)
+            CALLER  రేపు స్టార్ట్స్ ఉన్నాయా ఏమన్నావ్     what did you say?
+            AGENT   ...(identical)
+            CALLER  కాదు కాదు రేపు ఉన్నాయా. రేపు. రేపు ఉన్నాయా?
+            AGENT   ...(identical)
+
+        Four times. The BOOKED branch of the state block withdraws the whole
+        checklist and instructs one closing sentence, which the model then
+        produced on every turn no matter what was said to it -- so the more
+        insistently he asked, the more exactly it repeated itself.
+
+        A booking is not the end of the conversation, and treating it as one
+        makes the agent deaf at the single most expensive moment of the call:
+        a customer who wants an earlier slot is a customer who wants to buy.
+
+        The same rule as the money correction, for the same reason. A bare later
+        time may not silently move an appointment -- that is how run 266 booked
+        a visit out of "మూడు లక్షలు". But a caller who NAMES a different time is
+        rebooked, and a caller who ASKS about another day has the slots reopened
+        and put to him again rather than being guessed at: he asked whether
+        tomorrow was possible, which is not the same as choosing 10 a.m.
+        """
+        if not self.appointment_iso:
+            return False
+        when = booking.parse_slot(text)
+        if when is None and not is_correction(text):
+            # Nothing about time in it at all. Not this function's business.
+            return False
+
+        if _is_question(text):
+            # Asking, not choosing. Reopen and offer; never pick for them.
+            self.appointment_iso = ""
+            self.offered = ()
+            self.rebooked = None
+            return True
+
+        # A statement moves the visit only if it also ASKS to. Naming a day in
+        # passing is not a request -- "ఎల్లుండి మా వాళ్ళు ఊరికి వెళ్తున్నారు"
+        # mentions a day and asks for nothing, and moving a confirmed
+        # appointment on the strength of it is run 266's bug wearing a
+        # different hat.
+        if not (is_correction(text) or booking.RESCHEDULE.search(text or "")):
+            return False
+        booked = datetime.fromisoformat(self.appointment_iso)
+        if when is None or when == booked or booking.is_taken(when, self.taken_slots):
+            return False
+        self.appointment_iso = when.isoformat()
+        self.rebooked = booking.Slot(when)
+        return True
+
     def commit_ask(self) -> None:
         """Spend one ask, at the moment the agent actually says it.
 
@@ -341,6 +398,8 @@ class CallState:
     doubted: object = None
     # A figure the caller revised this turn, so the reply confirms the new one.
     corrected: object = None
+    # A time the caller moved this turn, so the reply confirms the new one.
+    rebooked: object = None
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -394,10 +453,14 @@ class CallState:
         # to them -- which is the complaint this whole file exists to answer.
         unknown = [f for f in self.required_fields if f not in self.known]
         if unknown:
-            lines.append(
-                f"NOT TOLD YET: {unknown}. You do NOT know these. Never say or "
-                "imply a value for any of them -- not their property, not their "
-                "city, not their situation. Speak generally until they tell you.")
+            # Kept to one clause on purpose. The first version of this line ran
+            # to 279 characters -- 59% of the whole state block -- and the block
+            # is the UNCACHED tail, re-read and re-billed on every single turn.
+            # Run 300 measured the LLM at 0.325s against run 292's 0.235s, and
+            # this line was most of the difference. The instruction is what
+            # works; the explanation of it was being paid for sixteen times a
+            # call and read by nobody.
+            lines.append(f"NOT TOLD YET: {unknown} -- never state or imply one.")
 
         # Any ending state MUST suppress the checklist. The 30-persona run showed
         # that simply listing STILL_NEED at the end of the context makes the model
@@ -420,10 +483,25 @@ class CallState:
         elif self.appointment_iso:
             # Booked. Everything else is now a reason to lose it.
             when = booking.Slot(datetime.fromisoformat(self.appointment_iso))
-            lines.append(
-                f"STILL_NEED: [] -- BOOKED for {when.say()}. Say that time back "
-                "to them once so they can correct it, thank them, and END THE "
-                "CALL. Ask nothing further.")
+            if self.rebooked is not None:
+                said = self.rebooked.say()
+                self.rebooked = None
+                lines.append(
+                    f"STILL_NEED: [] -- THEY MOVED IT. The visit is now {said}, "
+                    "not the earlier time. Confirm the NEW time back to them, "
+                    "thank them, and END THE CALL.")
+            elif _is_question(self.last_user_text):
+                # Booked is not deaf. Run 300 repeated one closing sentence at a
+                # man asking about another day, four times, until he gave up.
+                lines.append(
+                    f"STILL_NEED: [] -- BOOKED for {when.say()}. THEY JUST ASKED "
+                    "YOU SOMETHING: answer THAT first, in one short sentence. "
+                    "Then confirm the time and END THE CALL.")
+            else:
+                lines.append(
+                    f"STILL_NEED: [] -- BOOKED for {when.say()}. Say that time "
+                    "back to them once so they can correct it, thank them, and "
+                    "END THE CALL. Ask nothing further.")
         elif self.no_more_questions:
             lines.append("STILL_NEED: [] -- THE CALLER HAS ASKED YOU TO STOP "
                          "ASKING QUESTIONS. Ask nothing at all. Answer what "

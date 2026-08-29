@@ -78,6 +78,8 @@ ROLE_LABEL_RE = re.compile(
 
 # Long enough that a marker beginning inside the retained tail is never released
 # half-scanned. "ASSISTANT:" is 10; the MODE form with spaces and a value is ~14.
+from api.services.vaani.speech_register import spoken  # noqa: E402
+
 HOLDBACK = 24
 
 
@@ -116,6 +118,11 @@ class ReplySanitizer:
 
     def _drain(self, *, final: bool) -> str:
         self._buffer = self._strip_modes(self._buffer)
+        # Register is fixed on the BUFFER, before anything is released, so a
+        # word can never be half-spoken in one register and half in the other.
+        # Safe here because HOLDBACK (24 chars) already retains a tail longer
+        # than any phrase in the table, so no match ever straddles the split.
+        self._buffer = spoken(self._buffer)
 
         cut = ROLE_LABEL_RE.search(self._buffer)
         if cut:

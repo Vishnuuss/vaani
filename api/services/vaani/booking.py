@@ -36,6 +36,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from api.services.vaani.amounts import SCALES as _SCALES
 from datetime import datetime, timedelta, timezone
 
 # The customers are in India and so is the vendor who has to drive to the site.
@@ -74,6 +75,27 @@ NUMBER_WORDS = {
     "ఒకటి": 1, "రెండు": 2, "మూడు": 3, "నాలుగు": 4, "ఐదు": 5, "ఆరు": 6,
     "ఏడు": 7, "ఎనిమిది": 8, "తొమ్మిది": 9, "పది": 10, "పదకొండు": 11,
     "పన్నెండు": 12,
+    # English numerals in Telugu script, which is how these callers say the
+    # hour -- and how THIS AGENT says it back to them. `Slot.say()` renders
+    # 16:00 as "ఎల్లుండి సాయంత్రం four oclock"; run 300's caller repeated that
+    # phrase word for word as "ఎల్లుండి సాయంత్రం ఫోర్ ఓ క్లాక్", Sarvam
+    # transcribed the English "four" in Telugu script, and nothing here matched
+    # it. `named` stayed None, so the hour fell back to the generic
+    # సాయంత్రం = 17:00 and the visit was booked for FIVE.
+    #
+    # Stored 2026-08-31T17:00 against a spoken "four oclock": the vendor arrives
+    # an hour after the customer expected, and neither of them ever sees the
+    # discrepancy. Silent, and worse than an error.
+    #
+    # Morning hid it. ఉదయం defaults to 10 and callers pick "ten", so the
+    # fallback happened to be right and the gap only bit in the evening.
+    #
+    # Same class as the money parser's, which already carries these forms --
+    # see amounts.NUMERALS. Kept as its own table rather than imported: this one
+    # must stop at twelve, because a clock does.
+    "వన్": 1, "టు": 2, "త్రీ": 3, "ఫోర్": 4, "ఫైవ్": 5, "సిక్స్": 6,
+    "సెవెన్": 7, "ఎయిట్": 8, "నైన్": 9, "టెన్": 10, "ఎలెవెన్": 11,
+    "ట్వెల్వ్": 12,
 }
 
 # Money, not a clock. Run 266: the caller answered the BILL question with
@@ -87,6 +109,44 @@ NUMBER_WORDS = {
 MONEY = re.compile(
     r"(లక్ష|లచ్చ|వేల|వెయ్యి|కోటి|రూపాయ|రుపీ|బిల్లు|lakh|lac|crore|thousand|"
     r"rupee|rupees|rs\.?|₹|यूनिट|यूनिट्स|units?)", re.IGNORECASE)
+
+# Every scale word the money parser knows, as whole tokens. MONEY above is a
+# substring regex and misses the transliterated forms -- "ఫైవ్ లాక్స్" has no
+# లక్ష in it. That went unnoticed for as long as it did because "ఫైవ్" was not a
+# number word either, so the amount failed to parse as a TIME for the wrong
+# reason. Adding the transliterated numerals took that accident away and left
+# the real gap exposed: five lakhs a month became five o'clock.
+#
+# Read from `amounts.SCALES` rather than retyped, so the two cannot drift.
+MONEY_TOKENS = frozenset(k for k in _SCALES if len(k) > 2) | {
+    "రూపాయలు", "రూపాయల", "రుపీస్", "బిల్లు", "rupees", "rupee"}
+
+# Telugu written in Unicode cannot be split on ``: vowel signs are combining
+# marks, which `\w` does not count as word characters, so a boundary lands in
+# the middle of a syllable. Splitting on SCRIPT RUNS instead is what
+# `amounts.py` does, for the same reason and after the same bug.
+#
+# It matters here more than anywhere. "టు" (English "two") is two characters,
+# and a substring search for it matches inside "ఉంటుంది", "కుదురుతుంది" and most
+# other common verb endings -- so "ఆ బాగుంటుంది, ఓకే" ("yes, that's fine")
+# parsed as two o'clock. Consent became a booking, which is precisely the
+# failure this module was written to prevent.
+_TOKEN = re.compile(r"[\d]+|[ఀ-౿]+|[a-zA-Z]+")
+
+# Asking for the appointment to be MOVED, as opposed to mentioning a day.
+#
+# "ఎల్లుండి మా వాళ్ళు ఊరికి వెళ్తున్నారు" -- day after tomorrow my family are
+# going to the village -- names a day and asks for nothing. Moving a confirmed
+# visit on the strength of it is the same failure as reading "మూడు లక్షలు" as
+# three o'clock: a value that happened to appear in the sentence, taken as an
+# instruction nobody gave.
+#
+# So a statement moves a booking only when it also asks to. A question does not
+# need this -- a question is never allowed to rebook at all, only to reopen the
+# offer.
+RESCHEDULE = re.compile(
+    r"(మార్చ|చేయండి|చేయగలరా|పెట్టండి|పెట్టుకోండి|బదులు|కుదరదు|కాకుండా|"
+    r"instead|change|reschedule|shift|move it|make it)", re.IGNORECASE)
 
 # Consent to meet. NOT a time -- see the module docstring.
 AGREEMENT = re.compile(
@@ -223,12 +283,13 @@ def parse_slot(text: str, now: datetime | None = None) -> datetime | None:
     t = (text or "").strip()
     if not t:
         return None
-    if MONEY.search(t):
+    now = (now or datetime.now(IST)).astimezone(IST)
+    low = t.lower()
+    tokens = _TOKEN.findall(low)
+    if MONEY.search(t) or any(tok in MONEY_TOKENS for tok in tokens):
         # An amount, not an appointment. Reading one as the other books a visit
         # the caller never agreed to and ends the call -- run 266.
         return None
-    now = (now or datetime.now(IST)).astimezone(IST)
-    low = t.lower()
 
     day_offset = None
     for word, offset in DAY_WORDS.items():
@@ -248,11 +309,11 @@ def parse_slot(text: str, now: datetime | None = None) -> datetime | None:
     m = re.search(r"\b(\d{1,2})\s*(?::\s*\d{2})?\s*(o\s*.?\s*clock|గంట|बजे)?", low)
     named = int(m.group(1)) if m and 1 <= int(m.group(1)) <= 24 else None
     if named is None:
-        for word, n in NUMBER_WORDS.items():
-            pattern = (rf"(?<![a-z]){re.escape(word)}(?![a-z])" if word.isascii()
-                       else re.escape(word))
-            if re.search(pattern, low if word.isascii() else t):
-                named = n
+        # Whole tokens only. See _TOKEN: a substring search for "టు" matches
+        # inside half the verbs in the language.
+        for tok in tokens:
+            if tok in NUMBER_WORDS:
+                named = NUMBER_WORDS[tok]
                 break
     if named is not None:
         if named <= 12 and part_hour is not None and part_hour >= 12:

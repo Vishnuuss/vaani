@@ -223,6 +223,13 @@ def apply(state, text: str) -> Triage:
     if hasattr(state, "note_booking") and state.note_booking(text):
         logger.info(f"triage: appointment set for {state.appointment_iso}")
 
+    # A booking is not the end of the conversation. Run 300's caller asked for
+    # another day four times after his slot was confirmed and was read the same
+    # closing sentence each time.
+    if hasattr(state, "note_reschedule") and state.note_reschedule(text):
+        logger.info(f"triage: appointment reopened/moved -> "
+                    f"{state.appointment_iso or '(re-offering)'}")
+
     if result.next_step_agreed:
         state.next_step_agreed = True
     if result.buying_signal:
