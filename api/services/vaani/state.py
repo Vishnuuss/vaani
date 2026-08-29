@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from api.services.vaani import amounts, booking
+from api.services.vaani.corrections import is_correction
 
 
 class Phase(Enum):
@@ -213,14 +214,27 @@ class CallState:
         extractor -- which answers a turn late and answered null anyway. Money
         is structured; it is read here, synchronously, before the reply.
         """
-        if not self.still_need or not _is_money_field(self.still_need[0]):
+        asking = bool(self.still_need) and _is_money_field(self.still_need[0])
+        # A caller correcting himself. "సారీ, పది కాదు -- ఇరవై లక్షలు" arrives
+        # after the field is already filled, so the gate below would drop it and
+        # the lead record would keep the figure he just told us was wrong.
+        # Opening the gate to any later number is what booked run 266's phantom
+        # appointment; opening it only to an explicit repair keeps that shut.
+        revising = (not asking and is_correction(text)
+                    and any(_is_money_field(f) for f in self.known))
+        if not asking and not revising:
             # Only while a bill is actually being asked for. Otherwise "మూడు
             # లక్షలు" said in passing would overwrite a confirmed figure --
             # the same class of bug that once booked an appointment from it.
             return False
         amount = amounts.parse_amount(text)
         if amount is None:
+            # A repair with no new figure in it is not yet a repair -- he is
+            # about to say the number. Nothing is unset on the strength of a
+            # "కాదు" alone.
             return False
+        field = (self.still_need[0] if asking else
+                 next(f for f in self.known if _is_money_field(f)))
         if not amount.plausible:
             # Heard, but not believed. Run 286's caller said "60 క్రోర్స్" and
             # was congratulated on it. Recording the figure would put a fiction
@@ -229,8 +243,13 @@ class CallState:
             # confirm, once.
             self.doubted = amount
             return False
-        self.known[self.still_need[0]] = str(amount.rupees)
+        self.known[field] = str(amount.rupees)
         self.amount = amount
+        if revising:
+            # So the reply says it back. A correction the caller cannot hear
+            # land is indistinguishable to him from one that was ignored.
+            self.corrected = amount
+            self.reacted = False
         return True
 
     def note_booking(self, text: str) -> bool:
@@ -320,6 +339,8 @@ class CallState:
     reacted: bool = False
     # An amount that was said but is not credible as a monthly bill.
     doubted: object = None
+    # A figure the caller revised this turn, so the reply confirms the new one.
+    corrected: object = None
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -473,6 +494,19 @@ class CallState:
                 # instruction, and every extra clause here is re-read and
                 # re-billed on every turn (the state block is the uncached tail
                 # -- 1,086 chars once cost 0.43s per turn).
+                # A correction the caller cannot hear land is, to him,
+                # indistinguishable from one that was ignored -- and being
+                # ignored after taking the trouble to correct you is worse than
+                # the original mistake. So the new figure is said back before
+                # anything else happens with it.
+                if self.corrected is not None:
+                    was = getattr(self.corrected, "say", lambda: "")()
+                    self.corrected = None
+                    lines.append(
+                        f"THEY JUST CORRECTED THEMSELVES -- the bill is {was}, "
+                        "not what they said before. Say the new figure back so "
+                        "they know you caught it, in one short clause, and do "
+                        "NOT ask for it again.")
                 if self.amount is not None and not self.reacted:
                     self.reacted = True
                     rupees = getattr(self.amount, "rupees", 0)

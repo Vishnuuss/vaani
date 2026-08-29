@@ -67,6 +67,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from api.services.vaani.completeness import sounds_unfinished
 from pipecat.audio.turn.base_turn_analyzer import (
     BaseTurnAnalyzer,
     BaseTurnParams,
@@ -225,6 +226,12 @@ class TeluguTurnParams(BaseTurnParams):
     """Configuration for the Telugu turn analyzer."""
 
     stop_secs: float = 2.0          # the safety net if the model never fires
+    # The two-sided endpointing window. `stop_secs` is used only when the model
+    # is unavailable; when it IS available the wait is interpolated between
+    # these, driven by how finished the caller sounds. See `_wait_secs`.
+    min_endpoint_secs: float = 0.05
+    max_endpoint_secs: float = 1.40
+    fragment_floor_secs: float = 0.45
     # None means "use the value the model was trained to". An explicit number
     # WINS over the trained one -- the loader used to overwrite whatever was
     # passed in, which made the threshold impossible to override for a test or
@@ -246,6 +253,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._speech_triggered = False
         self._silence_ms = 0.0
         self._last_probability: float | None = None
+        self._text = ""
         self._mean = self._scale = self._coef = None
         self._intercept = 0.0
         self._forest = None
@@ -326,6 +334,17 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         Higher for fragments. A trailing-off one-word utterance is the model's
         weakest case and the caller's most noticeable one.
         """
+        # Words the model cannot hear. "నా బిల్లు దాదాపు అరవై" is a long, calm,
+        # falling utterance -- everything the prosody model reads as finished --
+        # and it ends on a number with the unit still to come. Raising the bar
+        # would not be enough here, because the acoustics genuinely do say
+        # COMPLETE and would clear any reachable threshold. Grammar is not a
+        # probability, so it does not argue with one: while the sentence cannot
+        # end where it stands, the early path is simply shut, and the turn ends
+        # on the timed path instead -- which the fragment floor bounds at
+        # 0.45 s, and which any resumed speech cancels.
+        if sounds_unfinished(self._text):
+            return 1.01                                  # unreachable by design
         if self._speech_secs < MIN_CONFIDENT_TURN_S:
             return max(self._params.threshold or 0.0, SHORT_TURN_THRESHOLD)
         return self._params.threshold
@@ -354,6 +373,66 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             return self._forest.probability(x)
         z = (x - self._mean) / self._scale
         return float(1.0 / (1.0 + np.exp(-(float(z @ self._coef) + self._intercept))))
+
+    def note_text(self, text: str) -> None:
+        """The transcript so far, for the completeness half of the decision.
+
+        Prosody and words fail on different utterances, which is why both are
+        read. "అవును" said with a falling tail is finished and sounds finished.
+        "60" is a number the caller is still assembling, and sounds exactly like
+        a finished word -- the tail energy is identical. Only the text knows it
+        is a dangling quantity, and only the audio knows that "మాది" was a
+        breath rather than an answer. Neither is sufficient alone.
+        """
+        self._text = text or ""
+
+    def _wait_secs(self) -> float:
+        """How long this particular silence is allowed to run before the turn ends.
+
+        The whole point of the class. Until 2026-08-29 the answer was a
+        constant, and its docstring claimed as a virtue that "there is no path
+        through this class that makes a turn slower than it already is" -- the
+        model was wired to the fast half of the decision and nothing else. So a
+        caller mid-sentence and a caller who had finished were given the same
+        0.2 s, and the caller mid-sentence was talked over. Run 295 ended with
+        him asking whether he was going to be allowed to answer at all.
+
+        Now the same probability that ends a turn early also holds one open:
+
+            p >= bar          COMPLETE immediately          (handled above)
+            p just under bar  min_endpoint_secs             (as fast as today)
+            p near zero       max_endpoint_secs             (he is still going)
+
+        linearly between. `bar` rather than a fresh constant because the trained
+        threshold is already the model's own idea of where "finished" sits, and
+        a second number would drift away from it the next time it is retrained.
+        """
+        lo, hi = self._params.min_endpoint_secs, self._params.max_endpoint_secs
+
+        if not self.enabled or self._last_probability is None:
+            # No model, or no score yet -- the first 120 ms of silence, before
+            # there is enough tail to read. Today's fixed timeout stands.
+            wait = self._params.stop_secs
+        else:
+            bar = self._bar() or 1.0
+            frac = min(1.0, max(0.0, self._last_probability / bar))
+            wait = hi - frac * (hi - lo)
+            # A short utterance is where the model is least reliable, so it gets
+            # the floor as a hedge against the model. With no model there is
+            # nothing to hedge -- and no early-end path either -- so this does
+            # not apply above.
+            if self._speech_secs < MIN_CONFIDENT_TURN_S:
+                wait = max(wait, self._params.fragment_floor_secs)
+
+        # The text floor is evidence in its own right, not a hedge, so it holds
+        # even while the model has no opinion yet. A transcript reading "అరవై"
+        # says the sentence is unfinished whether or not the waveform has been
+        # scored, and the 120 ms before the first score is exactly the window in
+        # which the old code cut people off.
+        if sounds_unfinished(self._text):
+            wait = max(wait, self._params.fragment_floor_secs)
+
+        return min(wait, hi)
 
     def append_audio(self, buffer: bytes, is_speech: bool) -> EndOfTurnState:
         audio = np.frombuffer(buffer, dtype=np.int16)
@@ -386,9 +465,9 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
                     self._clear(EndOfTurnState.COMPLETE)
                     return EndOfTurnState.COMPLETE
 
-        # The existing behaviour, untouched: if the model is not confident the
-        # turn still ends on silence, exactly as it does today.
-        if self._silence_ms >= self._params.stop_secs * 1000:
+        # The turn still ends on silence -- but on an ADAPTIVE amount of it,
+        # not a constant. This is the only line that lets a caller finish.
+        if self._silence_ms >= self._wait_secs() * 1000:
             self._clear(EndOfTurnState.COMPLETE)
             return EndOfTurnState.COMPLETE
         return EndOfTurnState.INCOMPLETE
@@ -410,3 +489,5 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._speech_triggered = state == EndOfTurnState.INCOMPLETE
         self._buffer = []
         self._silence_ms = 0.0
+        self._text = ""
+        self._last_probability = None

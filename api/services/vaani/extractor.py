@@ -21,6 +21,9 @@ import json
 import logging
 import re
 
+from api.services.vaani import amounts
+from api.services.vaani.state import _is_money_field
+
 log = logging.getLogger("vaani.extractor")
 
 SYSTEM = """You extract facts from a sales phone call.
@@ -93,6 +96,18 @@ async def extract(llm, fields: list[str], disqualifiers: list[str],
     return _coerce_json(raw)
 
 
+def _is_plausible_money(value) -> bool:
+    """Would a real monthly electricity bill ever be this number?"""
+    try:
+        rupees = float(str(value).replace(",", "").replace("₹", "").strip())
+    except (TypeError, ValueError):
+        # Not a bare figure -- "one lakh", "10-15k". Leave it alone; the
+        # synchronous parser in `state.note_amount` is the one that reads
+        # phrases, and it applies the same bounds itself.
+        return True
+    return amounts.MIN_PLAUSIBLE <= rupees <= amounts.MAX_PLAUSIBLE
+
+
 def apply_to_state(state, data: dict, fields: list[str]) -> None:
     """Merge extracted facts into CallState. Tolerant of extra/missing keys."""
     if not data:
@@ -104,6 +119,20 @@ def apply_to_state(state, data: dict, fields: list[str]) -> None:
         if value in (None, "", "unknown", "not stated"):
             continue
         if key in fields:
+            if _is_money_field(key) and not _is_plausible_money(value):
+                # Run 295 stored `monthly_bill: 62`. The caller had said
+                # "60 ... aaa ... 70" and was cut off after "60"; what reached
+                # the extractor was the fragment "62", and `learn` takes
+                # whatever it is handed. `amounts.py` has known since run 286
+                # what a monthly electricity bill can credibly be -- that check
+                # simply was not on this path, only on the synchronous one.
+                #
+                # Dropped rather than stored: an implausible figure in the lead
+                # record is worse than a null, because null is visibly missing
+                # and 62 looks like an answer. The state block asks the caller
+                # to confirm instead.
+                state.doubted = amounts.parse_amount(str(value))
+                continue
             state.learn(key, str(value))
 
     objection = data.get("objection")

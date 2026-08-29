@@ -29,6 +29,38 @@ DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS = 10.0
 # <= 2%. Telugu callers protested at 350 ms of TOTAL silence, and VAD's 0.2 s
 # adds to this, so 0.2 here means 0.4 s total — above that complaint line.
 DEFAULT_SMART_TURN_STOP_SECS = 0.2
+
+# --- Two-sided endpointing -------------------------------------------------
+# `smart_turn_stop_secs` above is a SINGLE number: every caller gets the same
+# silence window whatever they just said. Run 295 is what that costs. The
+# caller said, in order:
+#
+#   "ఇంకా చెప్పలే కదా బిల్లు"        I haven't even told you the bill yet
+#   "అప్పుడే మీరు క్వశ్చన్"          you're already on the next question
+#   "అసలు మిమ్మల్ని ఆన్సర్ చెప్పనియ్యరా మీరు?"  do you even let me answer?
+#
+# then hung up. VAD stop is 0.2 s and this was 0.2 s, so nobody on that call
+# was ever allowed to pause for more than about 0.4 s -- and "60 ... aaa ... 70"
+# needs more than that. The turn was cut at "60".
+#
+# The fix is the one every production stack uses: make the wait a FUNCTION of
+# how finished the caller sounds. LiveKit ships `min_endpointing_delay` 0.5 s
+# and `max_endpointing_delay` 6.0 s -- confident the turn ended, wait `min`;
+# unsure, wait up to `max`. Vaani already has the probability (TeluguTurnAnalyzer
+# scores the tail of every utterance) and has only ever been allowed to spend it
+# on ending turns EARLIER. These two numbers let it also hold one open.
+#
+# 6.0 s is right for LiveKit's general case and wrong for a sales call, where a
+# caller who has genuinely stopped must not sit in silence. 1.4 s here is
+# 1.6 s of total silence with VAD, which is roughly the longest hesitation
+# measured in the harvested caller recordings.
+DEFAULT_ENDPOINT_MIN_SECS = 0.05     # + VAD 0.2 = 0.25 s when it clearly ended
+DEFAULT_ENDPOINT_MAX_SECS = 1.40     # + VAD 0.2 = 1.60 s when clearly mid-thought
+# A short utterance is where the prosody model is least reliable and where being
+# wrong is most obvious ("మాది." is both a complete answer and the first word of
+# a sentence). Short turns therefore never end on less than this, whatever the
+# interpolation says -- the early COMPLETE path can still fire on them and does.
+DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS = 0.45
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
@@ -240,6 +272,12 @@ class WorkflowConfigurationDefaults(BaseModel):
     )
     max_user_idle_timeout: float = DEFAULT_MAX_USER_IDLE_TIMEOUT_SECONDS
     smart_turn_stop_secs: float = DEFAULT_SMART_TURN_STOP_SECS
+    endpoint_min_secs: float = Field(
+        default=DEFAULT_ENDPOINT_MIN_SECS, ge=0.0, le=2.0)
+    endpoint_max_secs: float = Field(
+        default=DEFAULT_ENDPOINT_MAX_SECS, ge=0.1, le=5.0)
+    endpoint_fragment_floor_secs: float = Field(
+        default=DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS, ge=0.0, le=3.0)
     turn_start_strategy: Literal["default", "min_words", "provisional_vad"] = (
         DEFAULT_TURN_START_STRATEGY
     )

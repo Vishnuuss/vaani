@@ -39,6 +39,9 @@ from api.services.vaani.telugu_turn import (
     TeluguTurnParams,
 )
 from api.schemas.workflow_configurations import (
+    DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS,
+    DEFAULT_ENDPOINT_MAX_SECS,
+    DEFAULT_ENDPOINT_MIN_SECS,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SMART_TURN_STOP_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
@@ -64,6 +67,27 @@ from pipecat.turns.user_stop import (
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
+
+
+class TextAwareTurnStopStrategy(TurnAnalyzerUserTurnStopStrategy):
+    """The stock strategy, plus: the analyzer is told what was said.
+
+    Pipecat keeps the transcript to itself -- `_handle_transcription` stores it
+    on the strategy and the analyzer only ever sees audio. That is the right
+    default for a prosody model, and wrong here, because half of what makes a
+    Telugu answer unfinished is not audible. "అరవై" (sixty) and "సరే" (fine) are
+    the same shape of sound; only the words say that one of them is a quantity
+    with the unit still to come.
+
+    Overriding rather than editing pipecat keeps the submodule clean and keeps
+    this decision where the rest of Vaani's turn-taking lives.
+    """
+
+    async def _handle_transcription(self, frame) -> None:
+        note = getattr(self._turn_analyzer, "note_text", None)
+        if note is not None:
+            note(frame.text)
+        await super()._handle_transcription(frame)
 
 
 def resolve_turn_start_min_words(run_configs: dict) -> int:
@@ -149,7 +173,20 @@ def create_user_turn_stop_strategies(
         # today's behaviour exactly as it is: it can make a turn faster, never
         # slower. If its weights are missing it reports `enabled = False` and we
         # fall back rather than run a detector that can never fire.
-        analyzer = TeluguTurnAnalyzer(params=TeluguTurnParams(stop_secs=stop_secs))
+        # Two-sided endpointing. `stop_secs` stays the fallback for when the
+        # model cannot load; these three are what the model spends its verdict
+        # on when it can. See DEFAULT_ENDPOINT_* for why a single number was
+        # never going to work.
+        analyzer = TeluguTurnAnalyzer(params=TeluguTurnParams(
+            stop_secs=stop_secs,
+            min_endpoint_secs=float(run_configs.get(
+                "endpoint_min_secs", DEFAULT_ENDPOINT_MIN_SECS)),
+            max_endpoint_secs=float(run_configs.get(
+                "endpoint_max_secs", DEFAULT_ENDPOINT_MAX_SECS)),
+            fragment_floor_secs=float(run_configs.get(
+                "endpoint_fragment_floor_secs",
+                DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS)),
+        ))
         if not analyzer.enabled:
             logger.warning(
                 "[turn] Telugu analyzer unavailable; falling back to Smart Turn "
@@ -158,7 +195,7 @@ def create_user_turn_stop_strategies(
             analyzer = LocalSmartTurnAnalyzerV3(
                 params=SmartTurnParams(stop_secs=stop_secs))
         return [
-            TurnAnalyzerUserTurnStopStrategy(
+            TextAwareTurnStopStrategy(
                 turn_analyzer=analyzer,
                 # Let the semantic turn detector end the turn on its own verdict
                 # instead of waiting for the final transcript (measured 438 ms
