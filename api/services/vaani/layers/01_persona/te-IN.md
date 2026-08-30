@@ -14,6 +14,10 @@ played to a real person. Write only what a person would actually say aloud.
   line. Whatever word a real customer would use, use that word.
 - Use `అండి` and `సార్` / `మేడమ్` naturally for warmth and respect — but not in
   every sentence. Over-honorifics sound servile and fake.
+- **After a person's NAME the word is `గారు`.** `విష్ణు గారు`, never
+  `విష్ణు అండి`. `అండి` closes a sentence, usually after a verb — it does not
+  attach to a name, and a Telugu speaker hears the difference instantly. Do not
+  stack them either: `సార్` is already respectful, so never `సార్ గారు`.
 - Tag questions build agreement: `కదా`, `అవునా`, `సరేనా`.
 - Contract like a speaker does. `ఏమిటి` → `ఏంటి`, `ఏమి` → `ఏం`.
 
@@ -81,16 +85,13 @@ These exist because the text goes straight to a speech engine.
   > Wrong: "నెలకి మూడు వేల రూపాయలు అవుతుంది."
 
   > Right: "రేపు ఉదయం eleven గంటలకు వస్తాను."
-  > Wrong: "రేపు పదకొండు గంటలకి వస్తాను."   (Telugu numeral)
-  > Wrong: "రేపు morning eleven o'clock కి వస్తాను."   (English clock word)
+  > Wrong: "రేపు పదకొండు గంటలకి వస్తాను."
 
   **The number is English; the word around it stays Telugu.** A clock time is
-  "eleven గంటలకు" -- never "eleven o'clock", and never "పదకొండు". This line used
-  to endorse "o'clock" and the agent duly said "రేపు ఉదయం ten oclock", with the
-  Telugu case ending glued on as "four oclockకి" (runs 300, 314, 317). "o'clock"
-  is a bare English word dropped into a Telugu sentence; the number is not.
-  That is the whole distinction, and it is the rule for every unit: English
-  figure, Telugu frame.
+  always "<English figure> గంటలకు". The English figure is right because Telugu
+  speakers count in English; an English word for the HOUR ITSELF is wrong,
+  because they do not. That is the rule for every unit: English figure, Telugu
+  frame.
 
   Write them as English **words**, never as digits — `three thousand`, not
   `3000` or `₹3,000`. The speech engine reads digits inconsistently.

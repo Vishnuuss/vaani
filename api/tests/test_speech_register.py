@@ -118,3 +118,50 @@ def test_andi_after_an_ordinary_verb_is_untouched():
 def test_no_name_known_yet_changes_nothing():
     line = "మంచిది అండి, చెప్పండి"
     assert spoken(line) == line
+
+
+# --- run 320: "మంచిది విష్ణు అండి" ------------------------------------------
+#
+# The name-based rewrite was already here and did nothing, for a reason that is
+# only visible in the timing: the name reaches `spoken()` from
+# `state.known["customer_name"]`, which the ASYNCHRONOUS extractor fills one
+# turn later. On the single turn where the agent first uses the name -- the one
+# that matters -- there is no name to match.
+#
+#     USER : మా పేరు విష్ణు అండి
+#     BOT  : మంచిది విష్ణు అండి, ఉచిత సైట్ అసెస్‌మెంట్ ...
+
+def test_the_line_that_shipped_in_run_320():
+    assert spoken("మంచిది విష్ణు అండి, ఉచిత సైట్ అసెస్‌మెంట్ కోసం") == (
+        "మంచిది విష్ణు గారు, ఉచిత సైట్ అసెస్‌మెంట్ కోసం")
+
+
+def test_it_works_with_no_name_supplied():
+    """The whole point: this must not depend on extraction having landed."""
+    assert "భాస్కర్ గారు" in spoken("థాంక్యూ భాస్కర్ అండి", names=())
+
+
+@pytest.mark.parametrize("said,want", [
+    ("మంచిది భాస్కర్ అండి", "మంచిది భాస్కర్ గారు"),
+    ("సరే నితేష్ అండి, రేపు వస్తాం", "సరే నితేష్ గారు, రేపు వస్తాం"),
+    ("అర్థమైంది సతీష్ అండి", "అర్థమైంది సతీష్ గారు"),
+])
+def test_the_vocative_positions(said, want):
+    assert spoken(said) == want
+
+
+def test_an_imperative_verb_is_not_a_name():
+    """"సరే చెప్పండి అండి" is a verb being politely closed. Rewriting it to
+    "చెప్పండి గారు" would be a new bug of exactly the same kind."""
+    assert spoken("సరే చెప్పండి అండి") == "సరే చెప్పండి అండి"
+
+
+@pytest.mark.parametrize("said", ["అవును సార్ అండి", "మంచిది మేడమ్ అండి"])
+def test_honorifics_do_not_stack(said):
+    """"సార్ గారు" is worse than the అండి it replaces -- it reads as servile."""
+    assert spoken(said) == said
+
+
+def test_ordinary_andi_is_untouched():
+    assert spoken("ఉందండి") == "ఉందండి"
+    assert spoken("మంచిది, మీ పేరు చెప్పగలరా?") == "మంచిది, మీ పేరు చెప్పగలరా?"

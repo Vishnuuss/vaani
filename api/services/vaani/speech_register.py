@@ -117,6 +117,50 @@ def _hours(text: str) -> str:
 # because it is one token, not two.
 _ANDI = "అండి"
 
+# The name-based rewrite above is necessary and NOT sufficient, and run 320
+# shows exactly why:
+#
+#     USER : మా పేరు విష్ణు అండి
+#     BOT  : మంచిది విష్ణు అండి, ఉచిత సైట్ అసెస్‌మెంట్ ...
+#
+# The name reaches `spoken()` from `state.known["customer_name"]`, which the
+# ASYNCHRONOUS extractor fills one turn later. So on the single turn where the
+# agent first uses the name -- the turn that matters -- there is no name to
+# match against, and `_names` has nothing to do. `_caller_names` even documents
+# the empty tuple as "correct rather than a gap". It is a gap.
+#
+# So this catches the construction instead of the word. An agent addressing
+# somebody opens with an acknowledgement, then the name, then the particle.
+# Nothing else in this agent's speech has that shape.
+#
+# The middle token is excluded when it ends in -ండి, because that is the Telugu
+# imperative ending: "సరే చెప్పండి అండి" is a verb being politely closed, and
+# rewriting it to "చెప్పండి గారు" would be a new bug of the same kind.
+_ACK_BEFORE_NAME = "|".join(
+    ["మంచిది", "సరే", "థాంక్యూ", "అర్థమైంది", "అవును", "ఓకే", "సరేనండి"])
+# Words that are already a form of address. గారు does not stack on top of them.
+_ALREADY_HONORIFIC = {"సార్", "మేడమ్", "అయ్యా", "అమ్మ", "అమ్మా", "గారు", "బాబు"}
+
+_VOCATIVE_ANDI = re.compile(
+    rf"(?:{_ACK_BEFORE_NAME})\s+([ఀ-౿]+)\s*{_ANDI}(?![ఀ-౿])"
+)
+
+
+def _vocative(text: str) -> str:
+    """"మంచిది విష్ణు అండి" -> "మంచిది విష్ణు గారు", with no list of names."""
+    def swap(m: "re.Match[str]") -> str:
+        word = m.group(1)
+        if word.endswith("ండి"):        # an imperative verb, not a name
+            return m.group(0)
+        if word in _ALREADY_HONORIFIC:
+            # "సార్ గారు" stacks two honorifics, which is its own kind of wrong
+            # -- and worse than the అండి it would be replacing, because it reads
+            # as servile rather than merely ungrammatical.
+            return m.group(0)
+        return m.group(0).replace(f"{word} {_ANDI}", f"{word} గారు").replace(
+            f"{word}{_ANDI}", f"{word} గారు")
+    return _VOCATIVE_ANDI.sub(swap, text)
+
 
 def _names(text: str, names: tuple[str, ...]) -> str:
     for name in names:
@@ -155,6 +199,7 @@ def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     if not text:
         return text
     out = _hours(_ranges(_OCLOCK.sub(" గంటలకు", text)))
+    out = _vocative(out)
     if names:
         out = _names(out, names)
     for literary, said in SPOKEN:
