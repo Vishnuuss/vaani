@@ -43,8 +43,7 @@ def test_the_offer_names_two_real_times():
     """
     block = state().render()
     assert "OFFER EXACTLY THESE TWO TIMES" in block
-    assert "గంటలకు" in block, block
-    assert "oclock" not in block, block
+    assert "o'clock" in block, block
     assert "ten" in block, block
 
 

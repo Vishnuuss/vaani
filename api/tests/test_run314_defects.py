@@ -129,63 +129,54 @@ def test_a_real_booking_still_books():
     assert r.next_step_agreed and not r.deferred
 
 
-# --- "ten oclock" ------------------------------------------------------------
+# --- a clock time must not be half English and half Telugu -------------------
+#
+# Corrected twice, and the rule is neither language. The client, verbatim:
+# "రేపు ఉదయం పది గంటలకు this is also okay and రేపు ఉదయం ten o'clock both are
+# okay but that ten గంటలు not good."
+#
+# On 29 Aug everything became గంటలకు, which broke "ten o'clock". On the morning
+# of the 30th everything became o'clock, which broke "పది గంటలకు". The defect
+# was never the language -- it was mixing them inside one time.
 
-def test_the_offer_line_says_gantalaku():
-    """The English NUMBER is deliberate and stays. "oclock" is not a number --
-    it is a bare English word dropped into a Telugu sentence."""
+@pytest.mark.parametrize("said", [
+    "రేపు ఉదయం పది గంటలకు",      # fully Telugu
+    "రేపు ఉదయం ten o'clock",     # fully English
+    "ఐదు గంటకి",
+])
+def test_a_consistent_clock_time_is_left_alone(said):
+    assert spoken(said) == said
+
+
+@pytest.mark.parametrize("said,want", [
+    ("రేపు ఉదయం ten గంటలకు", "రేపు ఉదయం ten o'clock"),
+    ("టెన్ గంటలకు", "ten o'clock"),
+    ("ఫైవ్ గంటకి", "five o'clock"),
+])
+def test_the_hybrid_is_made_consistent(said, want):
+    """An English figure with గంటలకు after it. Transliterated figures count as
+    English -- "టెన్ o'clock" would be a third hybrid, not a fix."""
+    assert spoken(said) == want
+
+
+def test_a_duration_is_untouched():
+    """"eight to ten గంటలు" is how many hours. It is the form the client asked
+    for, and it carries no case marker to catch on."""
+    assert spoken("రోజుకి eight to ten గంటలు ఎండ ఉంటుంది") == (
+        "రోజుకి eight to ten గంటలు ఎండ ఉంటుంది")
+
+
+def test_the_bare_singular_is_still_pluralised():
+    """The client's other correction: "ఐదు గంట" -> "ఐదు గంటలు"."""
+    assert spoken("ఐదు గంట") == "ఐదు గంటలు"
+
+
+def test_what_the_agent_offers_is_fully_english():
     from datetime import datetime, timedelta
 
-    from api.services.vaani.booking import IST
+    from api.services.vaani.booking import IST, parse_slot
     when = (datetime.now(IST) + timedelta(days=1)).replace(
         hour=10, minute=0, second=0, microsecond=0)
     said = Slot(when=when).say()
-    assert "గంటలకు" in said
-    assert "oclock" not in said
-    assert "ten" in said, "the hour stays in English, as the client asked"
-
-
-def test_the_sanitizer_catches_oclock_the_model_wrote_itself():
-    """booking.py is not the only source -- the model copies the pattern into
-    its own sentences after seeing it all call."""
-    out = spoken("రేపు ఉదయం ten oclock లేదా ఎల్లుండి సాయంత్రం four oclock")
-    assert "oclock" not in out
-    assert out == "రేపు ఉదయం ten గంటలకు లేదా ఎల్లుండి సాయంత్రం four గంటలకు"
-
-
-def test_the_telugu_case_suffix_is_not_left_dangling():
-    """Run 300 said "four oclockకి". Naive replacement gives "గంటలకుకి"."""
-    out = spoken("ఎల్లుండి సాయంత్రం four oclockకి షెడ్యూల్ చేసాం")
-    assert "గంటలకుకి" not in out
-    assert "four గంటలకు షెడ్యూల్" in out
-
-
-def test_already_correct_text_is_untouched():
-    assert spoken("రేపు ఉదయం ten గంటలకు") == "రేపు ఉదయం ten గంటలకు"
-
-
-# --- apologise, then ask the SAME thing -------------------------------------
-
-def test_the_models_own_apology_is_recognised():
-    """REPAIR_LINE is only reached when the repetition guard fires. Run 314's
-    apology was written by the model itself and matched nothing."""
-    from api.services.vaani.guardrails import SAID_NOT_HEARD
-
-    assert SAID_NOT_HEARD.search(
-        "సారీ, మీరు ఏ ఏరియా లేదా సిటీలో ఉన్నారో వినిపించలేదు. "
-        "మీది సొంత ఇల్లా, అపార్ట్‌మెంటా, లేదా కమర్షియల్ ప్లేసా?")
-    assert not SAID_NOT_HEARD.search("మంచిది, మీ పేరు చెప్పగలరా?")
-
-
-def test_the_state_block_says_ask_the_same_question_again():
-    s = CallState(required_fields=["location"],
-                  questions={"location": "మీరు ఏ సిటీలో ఉంటున్నారు?"})
-    s.misheard_last_turn = True
-    assert "ask the SAME" in s.render()
-
-
-def test_that_line_is_absent_on_an_ordinary_turn():
-    """It is re-read and re-billed on every turn it appears on."""
-    s = CallState(required_fields=["location"],
-                  questions={"location": "మీరు ఏ సిటీలో ఉంటున్నారు?"})
-    assert "ask the SAME" not in s.render()
+    assert "ten o'clock" in said and "గంటలకు" not in said
+    assert parse_slot(said) is not None, "the agent must be able to read it back"

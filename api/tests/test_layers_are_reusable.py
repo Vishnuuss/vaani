@@ -92,21 +92,15 @@ def test_no_rupee_figures(name):
 
 # --- the one convention the layers used to disagree about --------------------
 
-def test_the_clock_convention_is_english_number_telugu_frame():
-    """Three conventions were live at once and the agent flipped between them.
-
-    Layer 1 endorsed "eleven o'clock", `booking.Slot.say()` produced
-    "ten గంటలకు", and the model sometimes said "పది గంటలకు". Runs 300, 314 and
-    317 all show "oclock" reaching the caller, once as "four oclockకి" with the
-    Telugu case ending glued on.
-    """
+def test_the_clock_convention_is_stated_once():
+    """A clock time and a duration are different words, and the persona has to
+    say which is which -- three conventions were live at once and the agent
+    flipped between them (runs 300, 314, 317, 320)."""
     persona = (LAYERS / "01_persona/te-IN.md").read_text(encoding="utf-8")
-    assert "గంటలకు వస్తాను" in persona, "the right form must be shown"
-    # It may only appear as an example of what NOT to say.
-    for line in persona.splitlines():
-        if "o'clock" in line or "oclock" in line:
-            assert "Wrong" in line or "never" in line or line.startswith("  "), (
-                f"o'clock is endorsed somewhere: {line!r}")
+    flat = " ".join(persona.split())
+    assert "o'clock" in flat, "the clock form must be shown"
+    assert "గంటలు" in flat, "the duration form must be shown"
+    assert "must not be half of each" in flat
 
 
 def test_layer_three_is_where_vocabulary_lives():

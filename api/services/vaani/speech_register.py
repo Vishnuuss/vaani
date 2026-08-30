@@ -86,19 +86,72 @@ _NUMERALS_PLURAL = (
     "రెండు|మూడు|నాలుగు|ఐదు|ఆరు|ఏడు|ఎనిమిది|తొమ్మిది|పది|పదకొండు|పన్నెండు|"
     "టు|త్రీ|ఫోర్|ఫైవ్|సిక్స్|సెవెన్|ఎయిట్|నైన్|టెన్|"
     r"two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+")
-# A safety net for the same thing in text the MODEL wrote. It has seen
-# "oclock" in the offer line all day and copies the pattern into its own
-# sentences, where no amount of fixing booking.py reaches it.
-_OCLOCK = re.compile(r"\s*o\s*['’]?\s*clock(?:\s*(?:కి|కు|కీ))?", re.IGNORECASE)
+# A CLOCK TIME and a DURATION are different words, and conflating them is what
+# made this wrong twice in a row.
+#
+#     five o'clock   a point in the day        -> English, both halves
+#     five గంటలు      a length of time          -> Telugu noun
+#
+# The client's corrections read as contradictory until you separate the two:
+# "9 to 10 గంటలు" (how many hours of sunlight -- a DURATION, so Telugu) and
+# "5 o'clock, not 5 గంటలు" (when the vendor arrives -- a CLOCK TIME, so
+# English). Both are right. An earlier pass here rewrote every o'clock to
+# గంటలకు and so broke the second to fix the first.
+#
+# The Telugu dative case marker is the signal: "ఐదు గంటకు" / "ఐదు గంటకి" means
+# AT five, which is a clock time. Bare "ఐదు గంట" is a duration.
+_HOURS = re.compile(rf"({_NUMERALS_PLURAL})(\s+)గంట(?:లు|ల)?(కు|కి)?")
 
-_HOURS = re.compile(rf"({_NUMERALS_PLURAL})(\s+)గంట(కు|కి)?(?![ల])")
+
+# Telugu-NATIVE numerals. A clock time built from these is already consistent
+# and is left exactly as it is.
+_TELUGU_NUMERALS = {
+    "రెండు", "మూడు", "నాలుగు", "ఐదు", "ఆరు", "ఏడు", "ఎనిమిది", "తొమ్మిది",
+    "పది", "పదకొండు", "పన్నెండు",
+}
+
+# English numerals that Sarvam and the model both write in Telugu script. They
+# are English words, so a clock time built from one becomes fully English --
+# "టెన్ o'clock" would be a third hybrid, not a fix.
+_TRANSLITERATED = {
+    "టు": "two", "త్రీ": "three", "ఫోర్": "four", "ఫైవ్": "five",
+    "సిక్స్": "six", "సెవెన్": "seven", "ఎయిట్": "eight", "నైన్": "nine",
+    "టెన్": "ten",
+}
 
 
 def _hours(text: str) -> str:
+    """Fix the MIXED clock time. Leave both consistent ones alone.
+
+    The client's rule, in his words: "రేపు ఉదయం పది గంటలకు this is also okay and
+    రేపు ఉదయం ten o'clock both are okay but that ten గంటలు not good."
+
+    So the defect is not English and it is not Telugu -- it is mixing them
+    inside one time:
+
+        పది గంటలకు    fully Telugu     fine, left alone
+        ten o'clock   fully English    fine, left alone
+        ten గంటలకు     half of each     the hybrid -> "ten o'clock"
+
+    Two earlier passes both got this wrong by treating it as a choice between
+    languages. On 29 Aug everything became గంటలకు, which broke "ten o'clock".
+    This morning everything became o'clock, which broke "పది గంటలకు". Neither
+    was the rule.
+
+    DURATIONS are untouched by all of this: "eight to ten గంటలు" is how many
+    hours, it is the form the client asked for, and it has no case marker to
+    catch on.
+    """
     def fix(m):
-        case = m.group(3)
-        noun = "గంటలకు" if case else "గంటలు"
-        return f"{m.group(1)}{m.group(2)}{noun}"
+        number, gap, case = m.group(1), m.group(2), m.group(3)
+        if case:
+            if number in _TELUGU_NUMERALS:
+                return m.group(0)          # already consistent, in Telugu
+            # The hybrid, made consistent -- in English, since the figure is.
+            return f"{_TRANSLITERATED.get(number, number)} o'clock"
+        # No case marker: a duration. Only the singular/plural is corrected --
+        # "ఐదు గంట" -> "ఐదు గంటలు", which is the client's other correction.
+        return f"{number}{gap}గంటలు"
     return _HOURS.sub(fix, text)
 
 
@@ -198,7 +251,7 @@ def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     """
     if not text:
         return text
-    out = _hours(_ranges(_OCLOCK.sub(" గంటలకు", text)))
+    out = _hours(_ranges(text))
     out = _vocative(out)
     if names:
         out = _names(out, names)

@@ -232,6 +232,15 @@ class TeluguTurnParams(BaseTurnParams):
     min_endpoint_secs: float = 0.05
     max_endpoint_secs: float = 1.40
     fragment_floor_secs: float = 0.45
+    # A floor for turns the model is NOT nearly certain about, whatever their
+    # length. See `_wait_secs` -- this is the fix for being cut off mid-answer.
+    unsure_floor_secs: float = 0.30
+    # How close to the trained threshold still counts as "nearly certain".
+    # 0.95 measured best on the 1,393 labelled clips: p50 wait on turn_end
+    # clips is UNCHANGED at 0.057s, mean rises 0.115 -> 0.139s, and mid-turn
+    # clips ended in under 0.30s fall from 14 to 5. An unconditional floor
+    # costs 0.243s on the p50 and was rejected for it.
+    unsure_band: float = 0.95
     # None means "use the value the model was trained to". An explicit number
     # WINS over the trained one -- the loader used to overwrite whatever was
     # passed in, which made the threshold impossible to override for a test or
@@ -423,6 +432,29 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             # not apply above.
             if self._speech_secs < MIN_CONFIDENT_TURN_S:
                 wait = max(wait, self._params.fragment_floor_secs)
+            elif frac < self._params.unsure_band:
+                # The long-answer fix.
+                #
+                # The client's own diagnosis, and it was exactly right: "if the
+                # answer is one word it is working good, but if that answer is
+                # long it is continuing simply to the next question." The reason
+                # is above -- the fragment floor is gated on the turn being
+                # SHORT, so a caller who has been explaining for five seconds
+                # got no floor at all, and a wait as low as 0.05 s. The longer
+                # somebody talked, the less patience they were given.
+                #
+                # Run 319's caller said it out loud: "సార్ నేను క్వశ్చన్ ఆన్సర్
+                # చేయలేక నెక్స్ట్ క్వశ్చన్ ఎందుకు వెళ్ళాలి మీరు?" -- I can't even
+                # finish answering, why are you moving to the next question?
+                # That call captured not one field.
+                #
+                # Gated on the model still being unsure, which is what makes it
+                # free. When the score is within 5% of the trained threshold the
+                # fast path is untouched, and that is where the median turn sits
+                # -- measured on the 1,393 clips, turn_end p50 does not move at
+                # all (0.057 s), while mid-turn clips cut off under 0.30 s drop
+                # from 14 to 5.
+                wait = max(wait, self._params.unsure_floor_secs)
 
         # The text floor is evidence in its own right, not a hedge, so it holds
         # even while the model has no opinion yet. A transcript reading "అరవై"

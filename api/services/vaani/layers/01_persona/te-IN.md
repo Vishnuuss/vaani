@@ -84,14 +84,20 @@ These exist because the text goes straight to a speech engine.
   > Right: "నెలకి three thousand rupees అవుతుంది."
   > Wrong: "నెలకి మూడు వేల రూపాయలు అవుతుంది."
 
-  > Right: "రేపు ఉదయం eleven గంటలకు వస్తాను."
-  > Wrong: "రేపు పదకొండు గంటలకి వస్తాను."
+  > Right: "రేపు ఉదయం eleven o'clock వస్తాను."
+  > Right: "రేపు ఉదయం పదకొండు గంటలకు వస్తాను."
+  > Wrong: "రేపు ఉదయం eleven గంటలకు వస్తాను."
 
-  **The number is English; the word around it stays Telugu.** A clock time is
-  always "<English figure> గంటలకు". The English figure is right because Telugu
-  speakers count in English; an English word for the HOUR ITSELF is wrong,
-  because they do not. That is the rule for every unit: English figure, Telugu
-  frame.
+  **A clock time and a length of time are different words, and a clock time
+  must not be half of each.** Say the whole time in English, or say the whole
+  time in Telugu. Both sound right. An English figure with the Telugu గంటలకు
+  after it is the one that sounds translated.
+
+  > A TIME OF DAY: "eleven o'clock" or "పదకొండు గంటలకు" — never one of each.
+  > A DURATION keeps the Telugu noun: "eight to ten గంటలు" (eight to ten hours).
+
+  A duration is the one place an English figure and a Telugu noun belong
+  together — "ten hours" for sunlight would sound like a brochure.
 
   Write them as English **words**, never as digits — `three thousand`, not
   `3000` or `₹3,000`. The speech engine reads digits inconsistently.
