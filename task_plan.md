@@ -10,8 +10,9 @@
 5. Runs on free startup credits (NVIDIA Inception / Google for Startups / AWS Activate / Azure).
 
 ## Next Step
-Phase 9.1 -- the number whitelist, so the agent cannot state a quantity that is
-neither in the knowledge base nor in what the caller said.
+Place one live call and check the booking end to end: the caller names a time
+before the menu is offered, then picks the other option by its hour alone. Run
+323's stored slot must move from today to the day he actually said.
 
 ## Current Phase
 Phase 1

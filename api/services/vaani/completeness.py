@@ -90,7 +90,7 @@ def _tokens(text: str) -> list[str]:
     r"""Split on whitespace, then strip punctuation from each side.
 
     A regex tokeniser is not used here on purpose. `\w` excludes Telugu
-    combining vowel signs (Unicode category Mn), so `` lands in the middle of
+    combining vowel signs (Unicode category Mn), so `\b` lands in the middle of
     a syllable and words ending in a vowel sign -- which is most of them --
     never match. That trap silently broke every range in `amounts.py` once
     already; whitespace has no such opinion about Telugu.

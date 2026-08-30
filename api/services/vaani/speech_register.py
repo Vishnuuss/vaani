@@ -155,6 +155,31 @@ def _hours(text: str) -> str:
     return _HOURS.sub(fix, text)
 
 
+# "four o'clockకి" -> "four o'clock".
+#
+# The Telugu dative case marker, welded onto the end of an English word. It is
+# the other half of the mixing rule and the half that survived every pass at it:
+# `_hours` above only ever looks at "గంట", so a clock already rendered in
+# English walks straight past it and picks up a Telugu suffix on the way.
+#
+# Runs 300, 314 and 317 all said it, the register guide names it by name as
+# "the sound of a machine", and run 323 -- after the o'clock work landed -- said
+# it three times in its last four sentences:
+#
+#     సరే, ఈ రోజు సాయంత్రం four o'clockకి మీ ఇంటికి వచ్చి సైట్ సర్వే చేస్తాం.
+#
+# Dropping the marker is right rather than merely tidy. "five o'clock వస్తాను"
+# is how a code-mixing speaker says it, and it is exactly what `Slot.say()`
+# produces -- so the sentence the agent reads back now matches the one the
+# booking system holds, instead of diverging from it by a suffix.
+_OCLOCK_CASE = re.compile(
+    r"(o\s*'?\s*clock)\s*(?:కి|కు|క్కి|కీ)(?![ఀ-౿])", re.IGNORECASE)
+
+
+def _oclock_case(text: str) -> str:
+    return _OCLOCK_CASE.sub(lambda m: m.group(1), text)
+
+
 # "విష్ణు అండి" -> "విష్ణు గారు".
 #
 # అండి is a sentence-final politeness particle -- it goes after a VERB, closing
@@ -251,7 +276,7 @@ def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     """
     if not text:
         return text
-    out = _hours(_ranges(text))
+    out = _oclock_case(_hours(_ranges(text)))
     out = _vocative(out)
     if names:
         out = _names(out, names)

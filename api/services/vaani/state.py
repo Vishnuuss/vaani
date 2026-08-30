@@ -41,7 +41,7 @@ class Phase(Enum):
 # so the ending is what separates them.
 _QUESTION_WORDS = re.compile(
     r"(\?|ఎంత|ఎక్కడ|ఎప్పుడు|ఎలా|ఏమిటి|ఏంటి|ఏమి|ఎందుకు|ఎవరు|ఎన్ని|ఏది|ఏవి|"
-    r"(what|when|where|how|why|which|who|can|do|does|is|are))",
+    r"\b(what|when|where|how|why|which|who|can|do|does|is|are)\b)",
     re.IGNORECASE)
 
 # Ends on the AA sign: the Telugu interrogative particle.
@@ -63,8 +63,8 @@ _QUESTION_CLITIC = re.compile(r"\S\s+యా(\s|[?.!,]|$)")
 # things he most wants answered. "possible" is the specific word run 218 turned
 # on and the reason it is here by name.
 _QUESTION_EN = re.compile(
-    r"(possible|available|worth it|how much|how many|what about|"
-    r"tell me|explain|any idea|will (it|you|i)|should i)", re.IGNORECASE)
+    r"\b(possible|available|worth it|how much|how many|what about|"
+    r"tell me|explain|any idea|will (it|you|i)|should i)\b", re.IGNORECASE)
 
 
 def _norm(text: str) -> str:
@@ -280,9 +280,17 @@ class CallState:
         # A number only becomes a time once the agent has put two slots to them
         # and is waiting for an answer. Before that there is no question a time
         # could be the answer to.
-        if not self.offered:
+        # ...unless the utterance is a time on its own terms. Run 323's caller
+        # was asked "what time suits you?" and answered "ఎల్లుండి సాయంత్రం ఐదు
+        # ఇంటికి" before any menu had been rendered, so `offered` was empty and
+        # his answer was thrown away. The agent then told him his time was not
+        # among its options and booked him for today at four -- two days out,
+        # agreed by both, noticed by neither. A day word plus a named hour is an
+        # appointment however it arrives; see booking.names_a_time_unprompted.
+        if not self.offered and not booking.names_a_time_unprompted(text):
             return False
-        when = booking.parse_slot(text)
+        # The menu settles the day when they answer with the hour alone.
+        when = booking.parse_slot(text, offered=self.offered)
         if when is None:
             return False
         if booking.is_taken(when, self.taken_slots):
@@ -321,10 +329,21 @@ class CallState:
         if not self.offered:
             self.offered = booking.offer_slots(taken=self.taken_slots)
         first, second = self.offered
-        return (f'OFFER EXACTLY THESE TWO TIMES, both of them, in these words: '
-                f'"{first.say()}" or "{second.say()}". Offer nothing else and '
-                "invent no other time. THEY MUST NAME WHICH ONE -- a bare yes "
-                "is not a booking.")
+        # Two failures this line has actually produced, both on 30 August:
+        #
+        # Run 322 asked "ఈ రెండు ఎంపికలలో ఏది మీకు బాగుంటుంది?" -- which of these
+        # two suits you -- having never said either of them. The caller repeated
+        # his answer verbatim because there was nothing to choose between.
+        #
+        # Run 323 read "invent no other time" as a rule about the CALLER and
+        # told a man who had named a perfectly workable five o'clock that his
+        # time "మా ఎంపికలలో లేదు" -- is not among our options. It is the agent
+        # that may not invent a time. A customer may say any time he likes.
+        return (f'SAY BOTH OF THESE TIMES ALOUD: "{first.say()}" or '
+                f'"{second.say()}" -- never say "the two options" without '
+                "saying them. Invent no time of your own; but ACCEPT any time "
+                "THEY name and never tell them a time is unavailable. A bare "
+                "yes is not a booking -- ask WHICH.")
 
     def note_reschedule(self, text: str) -> bool:
         """The caller wanting a different time after one is already booked.
@@ -357,7 +376,9 @@ class CallState:
         """
         if not self.appointment_iso:
             return False
-        when = booking.parse_slot(text)
+        # The menu is still in hand after a booking, and a caller moving the
+        # visit names the new hour the same way he named the first one.
+        when = booking.parse_slot(text, offered=self.offered)
         if when is None and not is_correction(text):
             # Nothing about time in it at all. Not this function's business.
             return False
@@ -532,21 +553,28 @@ class CallState:
                 said = self.rebooked.say()
                 self.rebooked = None
                 lines.append(
-                    f"STILL_NEED: [] -- THEY MOVED IT. The visit is now {said}, "
-                    "not the earlier time. Confirm the NEW time back to them, "
-                    "thank them, and END THE CALL.")
+                    f'STILL_NEED: [] -- THEY MOVED IT. The visit is now "{said}", '
+                    "not the earlier time. Say those exact words back to them, "
+                    "the day included, thank them, and END THE CALL.")
             elif _is_question(self.last_user_text):
                 # Booked is not deaf. Run 300 repeated one closing sentence at a
                 # man asking about another day, four times, until he gave up.
                 lines.append(
-                    f"STILL_NEED: [] -- BOOKED for {when.say()}. THEY JUST ASKED "
+                    f'STILL_NEED: [] -- BOOKED for "{when.say()}". THEY JUST ASKED '
                     "YOU SOMETHING: answer THAT first, in one short sentence. "
-                    "Then confirm the time and END THE CALL.")
+                    "Then say that time back in those exact words, the day "
+                    "included, and END THE CALL.")
             else:
+                # The DAY is the half that goes missing. Run 323 booked
+                # "ఎల్లుండి సాయంత్రం five o'clock" and said back "సాయంత్రం ఐదు
+                # గంటలకు" -- the hour, alone, with no day attached to it. A time
+                # without a day is not an appointment; it is something the
+                # caller will remember differently from the vendor.
                 lines.append(
-                    f"STILL_NEED: [] -- BOOKED for {when.say()}. Say that time "
-                    "back to them once so they can correct it, thank them, and "
-                    "END THE CALL. Ask nothing further.")
+                    f'STILL_NEED: [] -- BOOKED for "{when.say()}". Say those '
+                    "exact words back once, the day included, so they can "
+                    "correct it, thank them, and END THE CALL. Ask nothing "
+                    "further.")
         elif self.no_more_questions:
             lines.append("STILL_NEED: [] -- THE CALLER HAS ASKED YOU TO STOP "
                          "ASKING QUESTIONS. Ask nothing at all. Answer what "
@@ -611,9 +639,6 @@ class CallState:
                 # and no time -- so the vendor had nothing to act on and the
                 # caller had been told a time that existed only in a transcript.
                 lines.append(self.offer_line())
-                lines.append(
-                    "If they only say yes, సరే or బాగుంటుంది without naming a "
-                    "time, ask WHICH of the two. Do not choose for them.")
                 self.pending_ask = nxt
             elif nxt and self.questions.get(nxt):
                 lines.append(f'NEXT QUESTION TO ASK: "{self.questions[nxt]}"')

@@ -98,6 +98,15 @@ NUMBER_WORDS = {
     "ట్వెల్వ్": 12,
 }
 
+# Any of the ways a clock time is MARKED, in either language. Used to tell an
+# utterance that is about a time from one that merely contains a number.
+CLOCK_MARK = re.compile(r"(o\s*.?\s*clock|గంట|ఓ\s*క్లాక్|बजे)", re.IGNORECASE)
+
+# For a slot more than two days out. "%d/%m" was what this used, and a date read
+# as digits down a phone line is not a day anybody writes down.
+WEEKDAYS = ("సోమవారం", "మంగళవారం", "బుధవారం", "గురువారం",
+            "శుక్రవారం", "శనివారం", "ఆదివారం")
+
 # Money, not a clock. Run 266: the caller answered the BILL question with
 # "మూడు లక్షలు" (three lakhs) and the number 3 was read as 3 oclock -- the agent
 # announced "రేపు మధ్యాహ్నం three oclock కి బుక్ చేసుకున్నాం", stored
@@ -121,7 +130,7 @@ MONEY = re.compile(
 MONEY_TOKENS = frozenset(k for k in _SCALES if len(k) > 2) | {
     "రూపాయలు", "రూపాయల", "రుపీస్", "బిల్లు", "rupees", "rupee"}
 
-# Telugu written in Unicode cannot be split on ``: vowel signs are combining
+# Telugu written in Unicode cannot be split on `\b`: vowel signs are combining
 # marks, which `\w` does not count as word characters, so a boundary lands in
 # the middle of a syllable. Splitting on SCRIPT RUNS instead is what
 # `amounts.py` does, for the same reason and after the same bug.
@@ -147,6 +156,13 @@ _TOKEN = re.compile(r"[\d]+|[ఀ-౿]+|[a-zA-Z]+")
 RESCHEDULE = re.compile(
     r"(మార్చ|చేయండి|చేయగలరా|పెట్టండి|పెట్టుకోండి|బదులు|కుదరదు|కాకుండా|"
     r"instead|change|reschedule|shift|move it|make it)", re.IGNORECASE)
+
+# Choosing a menu item by its position. Two items only, so there is nothing
+# between "first" and "second" to get wrong.
+ORDINAL_FIRST = re.compile(
+    r"(మొదటి|మొదలు|ఫస్ట్|first|one\s*st|1\s*st)", re.IGNORECASE)
+ORDINAL_SECOND = re.compile(
+    r"(రెండో|రెండవ|సెకండ్|second|2\s*nd)", re.IGNORECASE)
 
 # Consent to meet. NOT a time -- see the module docstring.
 AGREEMENT = re.compile(
@@ -176,8 +192,12 @@ class Slot:
         how run 262's caller and agent both spoke.
         """
         today = (now or datetime.now(IST)).astimezone(IST).date()
+        # A slot further out than "ఎల్లుండి" is named by its weekday, not by its
+        # date. This used to fall back to "%d/%m", so a slot ten days out was
+        # read to the caller as "01/09" -- and a date spoken as digits is not
+        # something anybody writes down, which is the whole job of this line.
         day = {0: "ఈ రోజు", 1: "రేపు", 2: "ఎల్లుండి"}.get(
-            (self.when.date() - today).days, self.when.strftime("%d/%m"))
+            (self.when.date() - today).days) or WEEKDAYS[self.when.weekday()]
         part = ("ఉదయం" if self.when.hour < 12
                 else "మధ్యాహ్నం" if self.when.hour < 16 else "సాయంత్రం")
         hour12 = self.when.hour if self.when.hour <= 12 else self.when.hour - 12
@@ -288,11 +308,90 @@ def is_taken(when: datetime, taken: Iterable[str | datetime]) -> bool:
     return any(_as_dt(t) == target for t in taken)
 
 
-def parse_slot(text: str, now: datetime | None = None) -> datetime | None:
+def _named_hour(low: str, tokens: list[str]) -> int | None:
+    """The clock hour said out loud, 1-24, before any part-of-day adjustment.
+
+    Pulled out of `parse_slot` so `names_a_time_unprompted` can ask the same
+    question without duplicating the answer -- the two drifting apart is how a
+    caller's time gets accepted by one and dropped by the other.
+    """
+    m = re.search(r"\b(\d{1,2})\s*(?::\s*\d{2})?\s*(o\s*.?\s*clock|గంట|बजे)?", low)
+    if m and 1 <= int(m.group(1)) <= 24:
+        return int(m.group(1))
+    # Whole tokens only. See _TOKEN: a substring search for "టు" matches inside
+    # half the verbs in the language.
+    for tok in tokens:
+        if tok in NUMBER_WORDS:
+            return NUMBER_WORDS[tok]
+    return None
+
+
+def _is_money(text: str, low: str, tokens: list[str]) -> bool:
+    return bool(MONEY.search(text)) or any(tok in MONEY_TOKENS for tok in tokens)
+
+
+def names_a_time_unprompted(text: str) -> bool:
+    """Is this unmistakably an appointment, with no menu behind it?
+
+    `CallState.note_booking` refuses to read any number as a time until two
+    slots have been put to the caller. That gate is right -- run 266 booked a
+    site visit out of "మూడు లక్షలు", which was an answer to the BILL question on
+    turn three -- and it is too wide.
+
+    Run 323. The agent asked, in as many words, "what time suits you?", and got:
+
+        USER   ఎల్లుండి సాయంత్రం ఐదు ఇంటికి
+
+    Day after tomorrow, evening, five, at my house. No menu had been rendered
+    yet, so `offered` was empty and the whole utterance was discarded. Two turns
+    later the agent told him "మీరు చెప్పిన సమయం మా ఎంపికలలో లేదు" -- the time you
+    said is not among our options -- and booked him for TODAY at four. Two days
+    and one hour out, agreed by both parties, and visible to neither.
+
+    So the test is the utterance's STRUCTURE, not whether permission was
+    granted first. A bill has no day word in it. "మూడు లక్షలు" has no ఎల్లుండి,
+    no రేపు, no ఈ రోజు, and it never will.
+
+    A day word ALONE is not enough either, and that is the other half of this.
+    "ఎల్లుండి మా వాళ్ళు ఊరికి వెళ్తున్నారు" -- day after tomorrow my family are
+    going to the village -- names a day and asks for nothing, and booking a
+    visit on the strength of it is run 266's bug wearing a different hat. An
+    hour has to be named too.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    low = t.lower()
+    tokens = _TOKEN.findall(low)
+    if _is_money(t, low, tokens):
+        return False
+    if not any(w in low or w in t for w in DAY_WORDS):
+        return False
+    return _named_hour(low, tokens) is not None
+
+
+def parse_slot(text: str, now: datetime | None = None,
+               offered: Iterable["Slot"] = ()) -> datetime | None:
     """The specific time the caller named, or None if they did not name one.
 
     None is the important return value. It means "they have not chosen", which
     must lead to one more question -- never to picking a slot on their behalf.
+
+    `offered` is the menu currently on the table, and it settles the DAY when
+    the caller answers with the hour alone. Run 323 is what happens without it:
+
+        AGENT  రేపు ఉదయం ten o'clock లేదా ఎల్లుండి సాయంత్రం four o'clock?
+        CALLER 4 ఓ క్లాక్
+        AGENT  సరే, ఈ రోజు సాయంత్రం four o'clockకి ...
+
+    He picked the second option. There was exactly one four in the menu and it
+    was two days away; the parser had never been shown the menu, so it resolved
+    a bare "four" against the wall clock and booked TODAY. The stored record
+    reads 2026-08-30T16:00 against an offer of 2026-09-01T16:00.
+
+    A caller choosing from a menu says the part that distinguishes the options
+    and drops the rest. That is not sloppiness -- it is how anyone answers a
+    closed question -- so the dropped half has to come from the menu.
     """
     t = (text or "").strip()
     if not t:
@@ -300,10 +399,12 @@ def parse_slot(text: str, now: datetime | None = None) -> datetime | None:
     now = (now or datetime.now(IST)).astimezone(IST)
     low = t.lower()
     tokens = _TOKEN.findall(low)
-    if MONEY.search(t) or any(tok in MONEY_TOKENS for tok in tokens):
+    if _is_money(t, low, tokens):
         # An amount, not an appointment. Reading one as the other books a visit
         # the caller never agreed to and ends the call -- run 266.
         return None
+
+    slots = [s for s in offered if isinstance(getattr(s, "when", None), datetime)]
 
     day_offset = None
     for word, offset in DAY_WORDS.items():
@@ -318,18 +419,32 @@ def parse_slot(text: str, now: datetime | None = None) -> datetime | None:
             break
     hour = part_hour
 
+    # "the first one" / "the second one". A caller who answers a two-item menu
+    # by position has chosen just as definitely as one who reads the time back,
+    # and run 262's whole lesson is that a choice must never be guessed at.
+    #
+    # Checked BEFORE the hour, because "ఫస్ట్ ఒకటి" -- the first one -- contains
+    # a numeral that is not a time. An explicit ordinal is what the caller meant;
+    # a number sitting next to it is the English word "one", not one o'clock.
+    if day_offset is None and len(slots) == 2:
+        if ORDINAL_FIRST.search(t):
+            return slots[0].when
+        if ORDINAL_SECOND.search(t):
+            return slots[1].when
+
     # An explicit clock time wins over the part of day: "ఉదయం ten oclock" is
     # ten, not the generic morning slot.
-    m = re.search(r"\b(\d{1,2})\s*(?::\s*\d{2})?\s*(o\s*.?\s*clock|గంట|बजे)?", low)
-    named = int(m.group(1)) if m and 1 <= int(m.group(1)) <= 24 else None
-    if named is None:
-        # Whole tokens only. See _TOKEN: a substring search for "టు" matches
-        # inside half the verbs in the language.
-        for tok in tokens:
-            if tok in NUMBER_WORDS:
-                named = NUMBER_WORDS[tok]
-                break
+    named = _named_hour(low, tokens)
     if named is not None:
+        # The menu decides the day when the caller names only the hour. Done
+        # BEFORE the +12 adjustment, because the caller said "four" and the slot
+        # holds 16:00 -- they are the same time and only one of them is written
+        # the way it was spoken.
+        if day_offset is None and slots:
+            matches = [s for s in slots
+                       if s.when.hour == named or s.when.hour % 12 == named % 12]
+            if len(matches) == 1:
+                return matches[0].when
         if named <= 12 and part_hour is not None and part_hour >= 12:
             named += 12                      # "మధ్యాహ్నం two" -> 14:00
         elif named <= 7 and part_hour is None:

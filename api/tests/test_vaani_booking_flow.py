@@ -41,8 +41,13 @@ def test_the_offer_names_two_real_times():
     The English NUMBER stays: Telugu callers say the hour in English and the
     client asked for it that way. Only "oclock" moves.
     """
-    block = state().render()
-    assert "OFFER EXACTLY THESE TWO TIMES" in block
+    st = state()
+    block = st.render()
+    # Both times, in the words to say them in -- asserted against the slots the
+    # booking system actually chose rather than against a fixed sentence, so
+    # rewording the instruction cannot quietly stop it naming them.
+    for slot in st.offered:
+        assert slot.say() in block, block
     assert "o'clock" in block, block
     assert "ten" in block, block
 
@@ -50,7 +55,8 @@ def test_the_offer_names_two_real_times():
 def test_the_offer_is_not_a_yes_no_question():
     """A yes/no was answered perfectly in run 262 and still booked nothing."""
     block = state().render()
-    assert "THEY MUST NAME WHICH ONE" in block
+    assert "A bare yes is not a booking" in block
+    assert "ask WHICH" in block
 
 
 def test_the_two_offers_do_not_change_between_turns():
@@ -96,7 +102,11 @@ def test_the_booked_time_is_read_back_for_correction():
     st.render()
     triage.apply(st, "ఎల్లుండి సాయంత్రం")
     block = st.render()
-    assert "say that time back" in block.lower()
+    assert "say those exact words back" in block.lower()
+    # Run 323 said back the hour with no day on it, which is not an
+    # appointment -- it is something the caller and the vendor will remember
+    # differently.
+    assert "day included" in block
 
 
 def test_a_refusal_does_not_book_anything():

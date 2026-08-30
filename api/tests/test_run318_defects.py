@@ -134,8 +134,11 @@ def test_it_says_what_to_do_instead_of_only_what_not_to():
 
 def test_a_live_checklist_still_offers_the_time():
     """The fix must not stop a first, legitimate offer."""
-    block = state().render()
-    assert "OFFER EXACTLY" in block
+    st = state()
+    block = st.render()
+    assert "SAY BOTH OF THESE TIMES" in block
+    for slot in st.offered:
+        assert slot.say() in block, block
     assert "NOTHING LEFT TO ASK" not in block
 
 

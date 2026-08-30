@@ -98,9 +98,9 @@ NUMERALS: dict[str, float] = {
 }
 
 # "టెన్ టు ట్వంటీ", "10 to 15", "పది నుంచి ఇరవై".
-# A token SET, not a regex with . Word boundaries do not work here:
+# A token SET, not a regex with \b. Word boundaries do not work here:
 # "టు" ends in a combining vowel sign, which `\w` does not count as a word
-# character, so `టు` never matches and every range silently collapsed to
+# character, so `\bటు\b` never matches and every range silently collapsed to
 # its upper figure. The same trap broke the tokeniser above.
 RANGE_TOKENS = {"to", "టు", "నుంచి", "నుండి", "మధ్య", "-", "–"}
 

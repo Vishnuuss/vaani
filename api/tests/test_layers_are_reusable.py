@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 FIGURE = re.compile(r"₹\s*[\d,]{3,}"
-                    r"|\d{4,}\s*(?:rupees|रूपयों)")
+                    r"|\b\d{4,}\s*(?:rupees|रूपयों)")
 
 LAYERS = Path(__file__).resolve().parents[1] / "services" / "vaani" / "layers"
 
@@ -84,7 +84,7 @@ def test_no_rupee_figures(name):
         # A figure shown as an example of the WRONG format is not a price
         # claim. Layer 1 says amounts are written as English words, "not
         # `3000` or `Rs 3,000`" -- that figure is the thing being forbidden.
-        if re.search(r"not|never|Wrong", line, re.IGNORECASE):
+        if re.search(r"\bnot\b|\bnever\b|Wrong", line, re.IGNORECASE):
             continue
         figures += re.findall(FIGURE, line)
     assert not figures, f"{name} states a concrete amount: {figures}"
