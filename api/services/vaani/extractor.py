@@ -23,7 +23,7 @@ import re
 
 from api.services.vaani import amounts
 from api.services.vaani.completeness import strip_fillers
-from api.services.vaani.negation import is_negative
+from api.services.vaani.negation import is_bare_denial, is_negative
 from api.services.vaani.state import _is_money_field
 
 log = logging.getLogger("vaani.extractor")
@@ -166,6 +166,11 @@ def apply_to_state(state, data: dict, fields: list[str],
                      key, data[key], user_text[:80])
             data = {k: v for k, v in data.items() if k != key}
 
+    # Whether this turn told us anything factual at all. See the disqualifier
+    # gate below -- an utterance that filled no field cannot have disqualified
+    # anybody either.
+    learned_this_turn = False
+
     for key, value in data.items():
         if key in ("objection", "disqualified", "disqualify_reason",
                    "buying_signal", "next_step_agreed", "must_end", "end_reason"):
@@ -195,6 +200,7 @@ def apply_to_state(state, data: dict, fields: list[str],
             # call. The filler vocabulary already existed; it had just never
             # been applied to a value on its way into the record.
             state.learn(key, strip_fillers(str(value)))
+            learned_this_turn = True
 
     objection = data.get("objection")
     if isinstance(objection, str) and objection:
@@ -223,6 +229,30 @@ def apply_to_state(state, data: dict, fields: list[str],
             # be walked back, so it needs an utterance we actually understood.
             log.info("not disqualifying (%s) -- previous turn was a misheard "
                      "repair", data.get("disqualify_reason"))
+        elif is_bare_denial(user_text) and not learned_this_turn:
+            # Run 324, and it is the worst kind of failure this agent has: it
+            # ended a live call on a fact it had never asked for.
+            #
+            #   49.48  BOT   మీది సొంత ఇల్లా, అపార్ట్‌మెంటా, లేదా కమర్షియల్ ప్లేసా?
+            #   53.35  USER  కాదు.
+            #   57.52  BOT   సార్, మీరు రూఫ్ లేదా టెర్రస్ కలిగి లేకపోతే
+            #                మేము కొనసాగించలేము. థాంక్యూ.
+            #
+            # He said "no" to a three-way question about his property type. The
+            # agent read that as "no roof", disqualified him and hung up at 64
+            # seconds. `roof_available` is null in the saved record -- the roof
+            # question was never asked, and there is no turn in that transcript
+            # where he could have answered it.
+            #
+            # So a disqualifier now needs the fact behind it. The extractor may
+            # still decide the caller is out; it may not decide it from a field
+            # it has neither been told nor asked about. Not a rule about roofs:
+            # the same shape would end a call on a budget or a city that was
+            # never discussed, and hanging up is the one move that cannot be
+            # walked back.
+            log.info("not disqualifying (%s) -- %r is a bare denial and this "
+                     "turn filled no field, so there is no fact behind it",
+                     data.get("disqualify_reason"), user_text[:60])
         else:
             state.disqualified = True
             state.disqualify_reason = str(

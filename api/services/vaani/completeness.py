@@ -86,6 +86,37 @@ _PUNCT = "?.!,;:। \t\n\"'"
 _DIGITS = re.compile(r"^[₹]?[\d,]+(?:\.\d+)?$")
 
 
+# A postposition with nothing after it. Telugu postpositions govern a head that
+# comes NEXT, so a sentence cannot stop on one -- "దేని గురించి" (about what)
+# and "మీ ఇంటి కోసం" (for your house) are both mid-phrase however calmly they
+# are said. Measured on 2,754 real turn ENDS: 3 of them, 0.11%.
+DANGLING_POSTPOSITIONS = {
+    "గురించి", "కోసం", "వల్ల", "బదులు", "తప్ప", "వరకు", "దాకా",
+    "మీద", "కింద", "పక్కన", "తరపున", "ప్రకారం", "తోటి",
+}
+
+# The topic/conditional suffix -అయితే: "ఇప్పుడైతే" (as for now), "మాదైతే" (as
+# for ours). It sets up a contrast that the rest of the sentence has to supply.
+#
+# Run 324, in full: "మాది వచ్చేసి మామూలుగా ఇప్పుడైతే" -- ours is, normally, as
+# for right now... -- ended there, and the agent answered it as though he had
+# finished. He had not said a single digit yet.
+#
+# Measured on the same 2,754 turn ends: ZERO false positives. A Telugu speaker
+# does not end a sentence on "as for now", and the data agrees.
+# Both the free form and the sandhi form. Telugu agglutinates, so "ఇప్పుడు +
+# అయితే" surfaces as "ఇప్పుడైతే" -- the initial అ is absorbed into the preceding
+# consonant as a vowel sign and the literal string "అయితే" is no longer in the
+# word. Checking only the free form is how this rule matched nothing on the
+# very utterance it was written for.
+_TOPIC_SUFFIXES = ("అయితే", "ఐతే", "ైతే")
+
+# "వచ్చేసి" is not the verb it looks like. In this dialect it is the spoken
+# equivalent of "that is to say" -- pure connective tissue, always followed by
+# the thing being said. 1 of 2,754.
+_DISCOURSE_MEDIAL = {"వచ్చేసి", "వచ్చేసరికి", "అంటే"}
+
+
 def _tokens(text: str) -> list[str]:
     r"""Split on whitespace, then strip punctuation from each side.
 
@@ -123,6 +154,15 @@ def sounds_unfinished(text: str) -> bool:
 
     # "పది నుంచి" / "10 to" -- the top of the range has not been said.
     if last in RANGE_TOKENS:
+        return True
+
+    # A postposition, a topic marker or a discourse connective: each one is a
+    # promise of the word that comes next. Added after run 324, and each
+    # measured against 2,754 utterances that really were turn ends before being
+    # kept -- 0.15% between them, at 0.45 s each.
+    if last in DANGLING_POSTPOSITIONS or last in _DISCOURSE_MEDIAL:
+        return True
+    if len(last) > 4 and last.endswith(_TOPIC_SUFFIXES):
         return True
 
     # A dangling quantity: a number with no unit, scale or particle after it.

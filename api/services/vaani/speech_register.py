@@ -267,6 +267,31 @@ def _ranges(text: str) -> str:
     return _RANGE.sub(lambda m: f"{m.group(1)} to {m.group(2)} {m.group(3)}లు", text)
 
 
+# Arithmetic is written, not spoken. Run 324 answered a subsidy question with:
+#
+#     ... 2 kW + + 1 kW = = 3 kW మొత్తం 78,000 రూపాయల వరకు ...
+#
+# read down a phone line, doubled operators and all. Nobody says an equation
+# out loud; they say the sum. "+" becomes "plus" and "=" becomes అంటే (which
+# means), both of which a code-mixing speaker really does say, and the doubling
+# -- an artefact of the model laying the arithmetic out as it worked -- is
+# collapsed first so it is not said twice.
+_ARITHMETIC = (
+    (re.compile(r"\s*\+\s*(?:\+\s*)+"), " plus "),
+    (re.compile(r"\s*=\s*(?:=\s*)+"), " అంటే "),
+    (re.compile(r"\s*\+\s*"), " plus "),
+    (re.compile(r"\s*=\s*"), " అంటే "),
+)
+
+
+def _arithmetic(text: str) -> str:
+    if "+" not in text and "=" not in text:
+        return text
+    for pattern, said in _ARITHMETIC:
+        text = pattern.sub(said, text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     """Rewrite one piece of generated speech into the register people use.
 
@@ -276,7 +301,7 @@ def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     """
     if not text:
         return text
-    out = _oclock_case(_hours(_ranges(text)))
+    out = _oclock_case(_hours(_ranges(_arithmetic(text))))
     out = _vocative(out)
     if names:
         out = _names(out, names)

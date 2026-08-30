@@ -25,6 +25,8 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from api.services.vaani.completeness import sounds_unfinished
+
 # --- remove me / stop calling ------------------------------------------------
 REMOVAL = re.compile(
     r"(లిస్ట్\s*(నుంచి|నుండి)?\s*తీసే|నంబర్\s*తీసే|కాల్\s*చేయ(కండి|వద్దు|కు)"
@@ -111,6 +113,38 @@ NO_MORE_QUESTIONS = re.compile(
     r"|(stop|no\s+more)\s+questions?|don'?t\s+ask\s+(me\s+)?(any)?\s*more)",
     re.IGNORECASE)
 
+# --- the caller is claiming the floor ----------------------------------------
+#
+# Run 324, and this is the one the client is angriest about. The whole call:
+#
+#     38.20  BOT   సరే, మీరు ఏ ఏరియా లేదా సిటీలో ఉంటున్నారు?
+#     40.58  USER  నేను చెప్తే వినండి.                 listen to what I say
+#     43.02  BOT   సరే, మీరు ఏ ఏరియా లేదా సిటీలో ఉంటారు?   (asks it again)
+#     45.68  USER  నేను చెప్పేది మాకు                  (cut off mid-sentence)
+#     49.48  BOT   మంచిది సార్, మీది సొంత ఇల్లా ...      (moves on regardless)
+#
+# He says LISTEN TO ME, twice, in as many words, and is asked the same question
+# and then a different one. `location` was saved as null. His own words earlier
+# in the same call: "చెప్పండి వినండి మీరు" -- speak, YOU listen.
+#
+# This is not a refusal and it is not a deferral. Both of those mean stop; this
+# one means WAIT, I have not finished. Treating it as a refusal would end the
+# call on a caller who is trying to buy, and treating it as nothing is what
+# produced the transcript above.
+#
+# Two consequences, and the second matters more than the first:
+#   - ask nothing this turn, so he gets the floor he asked for
+#   - do not SPEND the ask, so the question he was interrupted answering is
+#     still on the checklist and gets asked again later
+WANTS_THE_FLOOR = re.compile(
+    r"(నేను\s*చెప్తే|నేను\s*చెప్పేది|నేను\s*చెప్పింది|చెప్పనివ్వండి"
+    r"|నేను\s*చెప్తున్నా|చెప్తున్నా\s*కదా|వినండి\s*మీరు|మీరు\s*వినండి"
+    r"|కొంచెం\s*వినండి|ఆగండి|ఒక్క\s*నిమిషం\s*ఆగ|పూర్తిగా\s*వినండి"
+    r"|मेरी\s*बात\s*सुन|सुनिए\s*पहले"
+    r"|let\s+me\s+(finish|speak|talk|tell)|listen\s+to\s+me"
+    r"|hear\s+me\s+out|hold\s+on|wait\s+a\s+(minute|second))",
+    re.IGNORECASE)
+
 # --- a plain refusal ---------------------------------------------------------
 # One refusal earns exactly one gentle probe (Layer 2). The SECOND one ends the
 # call. Counting happens in `apply` because it needs the call's history --
@@ -163,6 +197,8 @@ class Triage:
     disqualify_reason: str = ""
     buying_signal: bool = False
     next_step_agreed: bool = False
+    # The caller has asked for the floor. Not a stop -- a "wait".
+    wants_the_floor: bool = False
     no_more_questions: bool = False
     already_answered: bool = False
     deferred: bool = False
@@ -206,9 +242,26 @@ def triage(text: str) -> Triage:
         next_step_agreed=agreed,
         buying_signal=bool(BUYING.search(t)),
         no_more_questions=bool(NO_MORE_QUESTIONS.search(t)),
+        wants_the_floor=bool(WANTS_THE_FLOOR.search(t)),
         already_answered=bool(ALREADY_ANSWERED.search(t)),
         deferred=bool(DEFERRAL.search(t)) and not agreed,
     )
+
+
+def _refund_ask(state, why: str) -> None:
+    """Give back the ask that was spent on a turn the caller never completed."""
+    field_name = (getattr(state, "pending_ask", "")
+                  or getattr(state, "last_asked", "") or "")
+    counts = getattr(state, "ask_counts", None)
+    if not field_name or counts is None:
+        return
+    if counts.get(field_name, 0) > 0:
+        counts[field_name] -= 1
+        # Cleared so a caller who is cut off twice on the same question does
+        # not earn the field an unbounded budget -- which would be run 218
+        # rebuilt out of refunds.
+        state.last_asked = ""
+        logger.info(f"triage: refunding the ask on {field_name!r} -- {why}")
 
 
 def apply(state, text: str) -> Triage:
@@ -286,6 +339,24 @@ def apply(state, text: str) -> Triage:
     if hasattr(state, "note_reschedule") and state.note_reschedule(text):
         logger.info(f"triage: appointment reopened/moved -> "
                     f"{state.appointment_iso or '(re-offering)'}")
+
+    # He asked to be heard. Give him the turn back, and do not charge him for it.
+    #
+    # The refund is the half that fixes run 324. `location` was asked twice --
+    # once normally, once while he was saying "listen to what I say" -- so the
+    # two-ask budget was spent and the field dropped off the checklist for the
+    # rest of the call. It was saved as null. An ask the caller was talked over
+    # is not an ask he declined to answer, and the budget exists to stop
+    # INTERROGATION (run 218), not to punish him for our own impatience.
+    if result.wants_the_floor:
+        state.wants_the_floor = True
+        _refund_ask(state, "the caller asked to be heard")
+
+    # Same refund when we simply cut him off. If his final transcript stops on
+    # a postposition or a topic marker, the sentence was still running when the
+    # turn was ended -- so whatever we asked, he never got to finish answering.
+    elif sounds_unfinished(text or ""):
+        _refund_ask(state, "his sentence was still running")
 
     if result.next_step_agreed:
         state.next_step_agreed = True

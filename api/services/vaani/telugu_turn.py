@@ -113,6 +113,27 @@ MIN_CONFIDENT_TURN_S = 0.65
 # Near-certainty, for those short turns only.
 SHORT_TURN_THRESHOLD = 0.995
 
+# If the caller starts talking again this soon after we ended his turn, we did
+# not end it -- we interrupted it. Nobody answers a question, hears the reply
+# begin, and starts a fresh sentence inside a second; a resume that fast is the
+# back half of the sentence we cut in two.
+RESUME_WINDOW_S = 1.0
+
+# How many of those it takes before this caller is treated as one the model
+# reads badly.
+#
+# Two, not one. One is noise -- a cough, a second thought, the line. Two is a
+# pattern, and the client's own description of it is exact: "it has a time
+# bound; if I answer in that time bound it replies, if past that time it moves
+# to the next question or interrupts me."
+#
+# The forest was trained on 651 callers and is right about most of them. It is
+# wrong about some, in a way that is obvious inside two turns and invisible to
+# a static threshold -- so the threshold stops being static. Callers we never
+# cut off are unaffected, which is what makes this cost nothing on the calls
+# that are already working.
+CUTOFFS_BEFORE_ADAPTING = 2
+
 
 def _f0_track(x: np.ndarray, sr: int, frame: int = 256) -> np.ndarray:
     """Autocorrelation pitch track; zero where unvoiced.
@@ -266,6 +287,12 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._mean = self._scale = self._coef = None
         self._intercept = 0.0
         self._forest = None
+        # When we last declared the turn over, and how often the caller
+        # immediately proved us wrong. Per call, by construction: the analyzer
+        # is built per pipeline, so one impatient caller cannot make the next
+        # one slower.
+        self._ended_at: float | None = None
+        self._cutoffs = 0
         self.enabled = (self._load_forest(gbm_path or GBM_PATH)
                         or self._load(weights_path or WEIGHTS_PATH))
 
@@ -333,6 +360,12 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         return self._speech_triggered
 
     @property
+    def interrupting(self) -> bool:
+        """Have we cut this particular caller off enough times to change how we
+        listen to him?"""
+        return self._cutoffs >= CUTOFFS_BEFORE_ADAPTING
+
+    @property
     def _speech_secs(self) -> float:
         """How much audio this turn holds, silence included."""
         return sum(a.size for _, a in self._buffer) / max(1, self._rate)
@@ -395,6 +428,23 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         """
         self._text = text or ""
 
+    def _band(self) -> float:
+        """How unsure the model has to be before the floor applies.
+
+        Normally 0.95, which is what makes the floor free: the median turn
+        scores above it and takes the fast path untouched.
+
+        Once we have talked over this caller twice, 1.0 -- the floor applies to
+        every turn of his, however confident the model sounds. The model's
+        confidence has already been shown to be wrong about him specifically,
+        and its being confident is precisely the failure mode: a caller who
+        pauses mid-thought produces a clean falling tail, scores high, and gets
+        the minimum wait for it. The longer he thinks, the faster we cut in.
+
+        Costs nothing on a call where nobody is interrupted, which is the point.
+        """
+        return 1.0 if self.interrupting else self._params.unsure_band
+
     def _wait_secs(self) -> float:
         """How long this particular silence is allowed to run before the turn ends.
 
@@ -432,7 +482,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             # not apply above.
             if self._speech_secs < MIN_CONFIDENT_TURN_S:
                 wait = max(wait, self._params.fragment_floor_secs)
-            elif frac < self._params.unsure_band:
+            elif frac < self._band():
                 # The long-answer fix.
                 #
                 # The client's own diagnosis, and it was exactly right: "if the
@@ -471,6 +521,19 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._buffer.append((time.monotonic(), audio))
 
         if is_speech:
+            if not self._speech_triggered and self._ended_at is not None:
+                # A new turn is starting. If it starts on the heels of the one
+                # we just closed, we closed it too early -- and this caller
+                # gets more room for the rest of the call.
+                since = time.monotonic() - self._ended_at
+                if since < RESUME_WINDOW_S:
+                    self._cutoffs += 1
+                    logger.info(
+                        f"[telugu-turn] caller resumed {since:.2f}s after we "
+                        f"ended his turn -- cut-off #{self._cutoffs}"
+                        + (", being more patient from here"
+                           if self.interrupting else ""))
+                self._ended_at = None
             self._silence_ms = 0.0
             self._speech_triggered = True
             return EndOfTurnState.INCOMPLETE
@@ -518,6 +581,8 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._clear(EndOfTurnState.COMPLETE)
 
     def _clear(self, state: EndOfTurnState) -> None:
+        if state == EndOfTurnState.COMPLETE:
+            self._ended_at = time.monotonic()
         self._speech_triggered = state == EndOfTurnState.INCOMPLETE
         self._buffer = []
         self._silence_ms = 0.0

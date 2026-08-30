@@ -96,6 +96,31 @@ def _tokens(text: str) -> list[str]:
     return re.findall(r"[ఀ-౿]+|[a-zA-Z']+", (text or "").lower())
 
 
+def is_bare_denial(text: str) -> bool:
+    """A "no" with nothing in it -- no subject, no object, no fact.
+
+    "కాదు." "లేదు." "no." One or two tokens, every one of them a negation.
+
+    Run 324 is why this exists. The agent asked a THREE-WAY question -- own
+    house, apartment or commercial -- and the caller answered "కాదు". The
+    extractor read that as "no roof", disqualified him and ended the call at
+    64 seconds, with `roof_available` null and the roof question never asked.
+
+    A bare denial is an answer to whatever was last asked and it carries no
+    statement of its own. It cannot be the evidence for a decision that ends
+    the call, because it does not say what is being denied. "మాకు ఇప్పటికే
+    సోలార్ ఉంది" -- we already have solar -- does say, and is unaffected.
+    """
+    toks = _tokens(text)
+    if not toks or len(toks) > 2:
+        return False
+    if _NOT_A_NO.search(text or ""):
+        return False
+    return all(
+        tok in NEGATIONS_TOKEN or any(neg in tok for neg in NEGATIONS_WITHIN)
+        for tok in toks)
+
+
 def is_negative(text: str) -> bool:
     """Does this utterance contain an actual refusal or denial?"""
     if not text or not text.strip():

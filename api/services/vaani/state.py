@@ -416,6 +416,7 @@ class CallState:
         if self.pending_ask:
             self.ask_counts[self.pending_ask] = (
                 self.ask_counts.get(self.pending_ask, 0) + 1)
+            self.last_asked = self.pending_ask
             self.pending_ask = ""
 
     @property
@@ -438,6 +439,12 @@ class CallState:
     ask_counts: dict = field(default_factory=dict)
     # The field the current prompt nominates, not yet spoken.
     pending_ask: str = ""
+    # The field whose question was most recently SPOKEN. `pending_ask` is
+    # cleared the moment it is committed, so by the time the caller answers
+    # there is nothing left naming what he was answering -- which is what a
+    # refund has to know. Cleared when refunded, so one interruption cannot
+    # give back two asks.
+    last_asked: str = ""
     # The appointment, once the caller has named one. ISO, because a vendor
     # diary needs a timestamp and not a sentence.
     appointment_iso: str = ""
@@ -461,6 +468,9 @@ class CallState:
     corrected: object = None
     # A time the caller moved this turn, so the reply confirms the new one.
     rebooked: object = None
+    # The caller has asked to be heard THIS turn. One turn only: he asked for
+    # the floor, he gets the floor, and then the call carries on.
+    wants_the_floor: bool = False
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -580,6 +590,22 @@ class CallState:
                          "ASKING QUESTIONS. Ask nothing at all. Answer what "
                          "they raised, or offer a time. Nothing else. "
                          + self.offer_line())
+        elif self.wants_the_floor:
+            # Run 324. He said "నేను చెప్తే వినండి" -- listen to what I say --
+            # and was asked the same question again, then a different one, and
+            # his answer was never captured.
+            #
+            # The checklist is suppressed for exactly one turn, the same way it
+            # is for a question, and for the same reason: prose telling the
+            # model to wait does not beat a list of fields at the end of the
+            # context. Removing the list does.
+            self.wants_the_floor = False
+            self.pending_ask = ""
+            lines.append(
+                "STILL_NEED: [] -- HE ASKED YOU TO LISTEN. Ask NOTHING this "
+                "turn. Say one short line inviting him to go on -- చెప్పండి "
+                "సార్, వింటున్నాను -- and then STOP TALKING. Do not fill the "
+                "silence and do not move to another question.")
         elif _is_question(self.last_user_text):
             # THE CHECKLIST IS SUPPRESSED, and that is the entire point.
             #
