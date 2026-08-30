@@ -124,8 +124,81 @@ def _echoes_a_number(reply: str, caller_said: str) -> bool:
     return bool(mine) and mine <= theirs
 
 
+# --- invented quantities -----------------------------------------------------
+# Run 318, verbatim:
+#
+#   USER : మా ఫ్యాక్టరీ వచ్చేసి 300 స్క్వేర్ మీటర్స్ ... ఎన్ని సోలార్ ప్యానెల్స్ కావాలి?
+#   BOT  : 300 square meters రూఫ్ మీద సుమారు 30 kW సిస్టమ్ పెట్టవచ్చు,
+#          అంటే 80-100 panels అవసరం అవుతాయి.
+#
+# Nobody told it 30 kW or 80-100 panels. It did the arithmetic itself, on a call,
+# for a factory owner who will repeat the figure to a vendor. Layer 2 has said
+# "Never manufacture a specific" since the beginning and the model ignored it,
+# which is this project's most repeated lesson: prose loses to a gate.
+#
+# A BLACKLIST cannot work here. Banning "kW" would break the best answer the
+# agent has -- "మొదటి 2 kW కి 30,000 rupees per kW ... 78,000 వరకు" is the PM
+# Surya Ghar subsidy, it is correct, and it came from the knowledge base.
+#
+# So: a WHITELIST. A number the agent says must appear either in the knowledge
+# base or in what the caller just said. Anything else it made up. The whitelist
+# is derived from the client's own compiled prompt, so a new client's numbers
+# are allowed automatically with no code change.
+_QUANTITY_UNIT = re.compile(
+    r"(?:kw|kilowatt|kwp|mw|panels?|ప్యానెల్స్|ప్యానెళ్ళు|units?|యూనిట్లు|"
+    r"sq\.?\s*(?:ft|m)|square\s+(?:feet|foot|meters?|metres?)|"
+    r"స్క్వేర్\s*(?:ఫీట్|మీటర్)|చదరపు|percent|%|శాతం|years?|సంవత్సరాల?|ఏళ్ళు)",
+    re.IGNORECASE)
+
+# Digits, or English/Telugu number words. Ranges ("80-100") split into both ends
+# on purpose: an invented range is two invented numbers, and quoting only its
+# top would slip through a check that looked at the string as a whole.
+_ANY_NUMBER = re.compile(
+    r"\d[\d,]*(?:\.\d+)?"
+    r"|(?<![A-Za-z])(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
+    r"twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|"
+    r"lakh|lakhs|crore|crores)(?![A-Za-z])"
+    r"|ఒక|ఒకటి|రెండు|మూడు|నాలుగు|ఐదు|ఆరు|ఏడు|ఎనిమిది|తొమ్మిది|పది|ఇరవై|ముప్పై"
+    r"|నలభై|యాభై|అరవై|వంద|వందల|వెయ్యి|వేలు|వేల|లక్ష|లక్షలు|కోటి|కోట్లు",
+    re.IGNORECASE)
+
+
+def numbers_in(text: str) -> set[str]:
+    """Every number token in `text`, normalised for comparison."""
+    out = set()
+    for m in _ANY_NUMBER.finditer(text or ""):
+        token = m.group(0).lower().replace(",", "").rstrip(".")
+        if token.isdigit():
+            # "30,000" and "30000" are the same claim, and "078" is 78. Strip
+            # leading zeros but never to nothing -- an earlier version turned
+            # the "000" of a comma-split "30,000" into "0" and then reported it
+            # as an invented quantity in the subsidy answer.
+            token = token.lstrip("0") or "0"
+        out.add(token)
+    return out
+
+
+def invented_quantities(reply: str, allowed: set[str]) -> list[str]:
+    """Numbers the reply states next to a unit that nobody supplied.
+
+    Only sentences carrying a UNIT are examined. A bare number in ordinary
+    speech -- "ఒక నిమిషం", "రెండు ఆప్షన్స్" -- is not a technical claim, and
+    flagging those would fire on almost every turn.
+    """
+    out = []
+    for sentence in re.split(r"[.!?।\n]+", reply or ""):
+        if not _QUANTITY_UNIT.search(sentence):
+            continue
+        for token in numbers_in(sentence):
+            if token not in allowed:
+                out.append(token)
+    return out
+
+
 def check(reply: str, *, allow_price: bool = False,
-          closing: bool = False, caller_said: str = "") -> GuardrailReport:
+          closing: bool = False, caller_said: str = "",
+          known_numbers: set[str] | None = None) -> GuardrailReport:
     """Inspect a drafted reply. Fast, deterministic, no model call.
 
     `closing` comes from `must_close(state)`. When it is set, the call is over
@@ -186,6 +259,24 @@ def check(reply: str, *, allow_price: bool = False,
                         "next step is what settles the exact figure."),
         ))
 
+    # An EMPTY whitelist means no knowledge base was compiled, not that every
+    # number is forbidden. Enforcing against nothing would gag the agent on its
+    # first sentence, and a client with no facts yet is the one case where the
+    # agent has least to lose by staying quiet about numbers on its own.
+    if known_numbers:
+        allowed = known_numbers | numbers_in(caller_said)
+        made_up = invented_quantities(text, allowed)
+        if made_up:
+            report.violations.append(Violation(
+                rule="no_invented_quantity",
+                evidence=", ".join(sorted(set(made_up))),
+                correction=(
+                    "You stated a number nobody gave you. Do not size a system, "
+                    "count panels, or estimate any quantity yourself. Say it "
+                    "depends on the site assessment and that the vendor gives "
+                    "the exact figure."),
+            ))
+
     return report
 
 
@@ -198,6 +289,11 @@ BLOCKING_RULES = frozenset({
     "no_questions_when_closing",
     "no_price_quote",
     "no_guarantee",
+    # Run 318 told a factory owner his 300 sq m roof takes "30 kW ... 80-100
+    # panels". He will repeat that to a vendor, and it came from nowhere. That
+    # is a compliance failure of the same kind as an invented price, so it gets
+    # the same treatment: the reply is replaced, not logged.
+    "no_invented_quantity",
 })
 
 

@@ -578,6 +578,27 @@ class CallState:
                 "one. Answer from your facts, or say the team will confirm the "
                 "exact figure. Never invent a number, price, location or brand.")
             self.pending_ask = ""
+        elif not self.still_need:
+            # Every field is either answered or out of its two-ask budget.
+            #
+            # Run 318 reached this state at 04:10 and then offered the same
+            # appointment SIX more times, to a caller who was asking real
+            # questions about cost and panels each time. The budget worked --
+            # `assessment_agreed` had dropped out of the checklist. The problem
+            # is what replaced it: the literal string "STILL_NEED: []" and
+            # nothing else.
+            #
+            # An empty checklist is not an instruction. With no instruction the
+            # model falls back on the conversation history, and by then the
+            # history was six appointment offers deep, so it produced a seventh.
+            # That is what the client means by harassing: an agent with nothing
+            # left to ask, asking the last thing again.
+            lines.append(
+                "STILL_NEED: [] -- NOTHING LEFT TO ASK. You have already "
+                "offered a time; do NOT offer one again and do NOT re-ask "
+                "anything. Answer whatever they ask, warmly and in one or two "
+                "sentences. When they have no more questions, thank them by "
+                "name and END THE CALL.")
         else:
             lines.append(f"STILL_NEED: {self.still_need or '[]'}")
             # Field KEYS are meaningless to the model -- it was being handed

@@ -83,6 +83,15 @@ class StateInjector(FrameProcessor):
         super().__init__()
         self._context = context
         self._system_prompt = system_prompt
+        # Every number the agent is ALLOWED to say, taken from its own compiled
+        # prompt -- which contains the client's knowledge base. Computed once
+        # per call rather than per turn: the prompt does not change mid-call,
+        # and this scans ~30 KB of text.
+        #
+        # This is what makes the invented-quantity rule work for any client
+        # without a code change: a new knowledge base defines its own legal
+        # numbers just by containing them.
+        self.known_numbers = guardrails.numbers_in(system_prompt)
         self.state = CallState(
             required_fields=brief.field_names,
             questions=dict(zip(brief.field_names, brief.question_texts)),
@@ -248,7 +257,11 @@ class ReplyFilter(FrameProcessor):
         report = guardrails.check(
             self._spoken + candidate, closing=closing,
             caller_said=(self._injector.state.last_user_text
-                         if self._injector else ""))
+                         if self._injector else ""),
+            # getattr, not attribute access: the injector is a test double in
+            # several suites, and a missing whitelist must mean "do not enforce"
+            # rather than an AttributeError on a live call.
+            known_numbers=getattr(self._injector, "known_numbers", None))
         hits = guardrails.blocking(report)
         if not hits:
             return candidate

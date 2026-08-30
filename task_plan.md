@@ -10,8 +10,8 @@
 5. Runs on free startup credits (NVIDIA Inception / Google for Startups / AWS Activate / Azure).
 
 ## Next Step
-One supervised call to verify Phases 7 and 8 together. Both are deployed
-(992b10d, app healthy) and neither has been exercised by a real call.
+Phase 9.1 -- the number whitelist, so the agent cannot state a quantity that is
+neither in the knowledge base nor in what the caller said.
 
 ## Current Phase
 Phase 1
@@ -157,3 +157,51 @@ agent waiting. That is section 4.1 working.
 `992b10d`, pushed to the `vaani` remote and deployed. 400 synchronous tests
 passing, 39 new. The one failure in `test_reply_sanitizer.py` is pre-existing,
 confirmed by stashing rather than assumed.
+
+
+### Phase 9 — Run 318: the first post-fix call  (Status: in_progress)
+
+Run 318 (WR-TEL-OUT-55669215, 200s) is the ONLY call placed after 992b10d and
+after the knowledge base went in. Runs 315-317 all predate both by minutes.
+
+**What the fixes did deliver, measured:**
+- p50 TOTAL 0.892s. "ten గంటలకు", not "ten oclock" (317, pre-deploy, still said it).
+- The subsidy question was answered with the real MNRE figures for the first
+  time: "మొదటి 2 kW కి 30,000 rupees per kW, తర్వాత 18,000, మొత్తం 78,000 వరకు".
+- "మీ కంపెనీ పేరేం?" and "మీ ఆఫీస్ ఎక్కడ?" both answered instead of deflected.
+
+**What is still wrong:**
+
+| # | Defect | Evidence from run 318 |
+|---|---|---|
+| 9.1 | **Invented engineering numbers** | "300 square meters రూఫ్ మీద సుమారు 30 kW ... అంటే 80‑100 panels" -- computed, not known. `_PRICE` only catches 4+ digit rupees, so nothing flagged it. |
+| 9.2 | Verbatim self-repetition | "MB Solar Hub, Vijayawada MG Road lo undi." then, one turn later, "అవును, MB Solar Hub, Vijayawada MG Road lo undi." |
+| 9.3 | Buying signals ignored | Caller asked cost 3x and panel count 2x -- all buying signals per Layer 2 -- and got the appointment question pushed at him each time. |
+| 9.4 | Truncated / interleaved replies | 5+ places where a reply starts, stops mid-clause, and a different one begins. |
+| 9.5 | `location` normalisation | run 318 stored "అనంటపూర్" (Telugu script), run 316 stored "Hyderabad" (English). |
+| 9.6 | Appointment time wrong | run 316: caller said "రేపు ఉదయం", stored `2026-08-30T17:00` -- 5 PM. |
+| 9.7 | 200s duration cap, no close | Engaged caller, five appointment asks, `assessment_agreed: false`. |
+
+#### 9.1 design — a whitelist, not a blacklist
+Layer 2 already says "Never manufacture a specific" and it was ignored. Banning
+kW outright is not an option: the subsidy answer NEEDS "2 kW", "3 kW", "30,000
+per kW". The rule that works is **a number the agent says must appear either in
+the knowledge base or in what the caller just said.** Everything else is
+invented. The whitelist is derived from the compiled business layer, so it is
+per-client and automatic -- a new client's KB defines its own allowed numbers
+with no code change.
+
+### Phase 10 — Cost and efficiency, measured not asserted  (Status: pending)
+Five techniques minimum, each with a before/after number. Research done
+2026-08-30: Groq gives 50% off cached input tokens automatically on
+gpt-oss-120b, no write fee, on shared prefixes with recent requests.
+
+### Phase 11 — Layer 2 deep training + reusability  (Status: pending)
+Layer 2 is 15,860 chars and already says the right things. Run 318 shows it is
+not OBEYED. The lesson this project has proven repeatedly is that prose loses to
+deterministic enforcement. More prose is not the fix; more gates are.
+
+### Phase 12 — The Telugu register guide  (Status: pending)
+Where English belongs inside Telugu speech, and what to say. Research anchor:
+measured code-mixing among Telugu-English bilinguals in AP runs ~40% in informal
+conversation, concentrated on technical and modern terms.
