@@ -328,6 +328,10 @@ def apply(state, text: str) -> Triage:
     if hasattr(state, "note_amount") and state.note_amount(text):
         logger.info(f"triage: bill = {state.amount.rupees:,} ({state.amount.say()})")
 
+    # A day ruled out is never offered again.
+    if hasattr(state, "note_day_rejected") and state.note_day_rejected(text):
+        logger.info("triage: caller ruled out a day; rebuilding the menu")
+
     # A named time books the visit. Bare consent deliberately does not: see
     # CallState.note_booking and run 262.
     if hasattr(state, "note_booking") and state.note_booking(text):

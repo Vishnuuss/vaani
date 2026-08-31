@@ -165,6 +165,36 @@ ORDINAL_SECOND = re.compile(
     r"(రెండో|రెండవ|సెకండ్|second|2\s*nd)", re.IGNORECASE)
 
 # Consent to meet. NOT a time -- see the module docstring.
+# A day being ruled OUT. Run 336: "నాకు అసలుకి రేపు సరిపోదండి" -- tomorrow does
+# not suit me at all -- and the agent's very next menu offered tomorrow again.
+# Re-offering a day the caller has just refused is the clearest possible signal
+# that nobody is listening, and it costs a slot that could have been useful.
+#
+# Narrow on purpose: the rejection word has to be near the day word. "రేపు
+# కుదురుతుంది" is the opposite sentence and shares most of its characters.
+_DAY_ALT = "|".join(["రేపు", "ఎల్లుండి", "ఈ రోజు", "ఈరోజు", "ఇవాళ", "ఇయ్యాల",
+                     "today", "tomorrow"])
+_NO_ALT = "|".join(["సరిపోద", "కుదరద", "వద్ద", "కాద", "పనికిరాద", "వీల్లేద",
+                    "not ok", "won.t work", "doesn.t suit", "no good"])
+REJECTED_DAY = re.compile(
+    rf"(?:{_DAY_ALT})[^.!?]{{0,30}}?(?:{_NO_ALT})"
+    rf"|(?:{_NO_ALT})[^.!?]{{0,20}}?(?:{_DAY_ALT})", re.IGNORECASE)
+
+
+def rejected_day(text: str, now: datetime | None = None) -> datetime | None:
+    """The DATE the caller has just ruled out, if they ruled one out."""
+    t = (text or "").strip()
+    if not t or not REJECTED_DAY.search(t):
+        return None
+    now = (now or datetime.now(IST)).astimezone(IST)
+    low = t.lower()
+    for word, offset in DAY_WORDS.items():
+        if word in low or word in t:
+            return (now + timedelta(days=offset)).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+    return None
+
+
 AGREEMENT = re.compile(
     r"(సరే|అలాగే|ఓకే|ok(ay)?|బాగుంటుంది|బాగుంది|కుదురుతుంది|పర్వాలేదు|"
     r"చేద్దాం|పెట్టుకోండి|అవును|యస్|sure|fine|works)", re.IGNORECASE)
@@ -450,6 +480,34 @@ def parse_slot(text: str, now: datetime | None = None,
         elif named <= 7 and part_hour is None:
             named += 12                      # a bare "five" about a site visit
         hour = named
+
+    # The mirror of the menu rule above: he named the DAY and left the hour to
+    # the menu. Run 336 -- offered "రేపు ఉదయం ten o'clock" or "ఎల్లుండి సాయంత్రం
+    # four o'clock", he answered "ఎల్లుండి నాకు బెటర్", and the hour fell through
+    # to the generic mid-morning default. The agent then confirmed "ఎల్లుండి
+    # ఉదయం ten o'clock" -- a time it had never offered, six hours from the one
+    # he had actually chosen.
+    #
+    # Choosing by the day is exactly as definite as choosing by the hour when
+    # only one offer is on that day.
+    # Same reasoning when the only "hour" we have came from the part of day.
+    # "ఎల్లుండి సాయంత్రం" resolves to the generic 17:00 while the offer sitting
+    # on that evening is 16:00 -- so the agent confirms a time it never put to
+    # him, by an hour, which is exactly the class of error this whole module
+    # exists to stop.
+    if named is None and day_offset is not None and part_hour is not None and slots:
+        target = (now + timedelta(days=day_offset)).date()
+        same_part = [t for t in slots
+                     if t.when.date() == target
+                     and (t.when.hour < 12) == (part_hour < 12)]
+        if len(same_part) == 1:
+            return same_part[0].when
+
+    if hour is None and day_offset is not None and slots:
+        target = (now + timedelta(days=day_offset)).date()
+        same_day = [s for s in slots if s.when.date() == target]
+        if len(same_day) == 1:
+            return same_day[0].when
 
     if day_offset is None and hour is None:
         return None

@@ -302,6 +302,31 @@ class CallState:
         self.appointment_iso = when.isoformat()
         return True
 
+    def note_day_rejected(self, text: str) -> bool:
+        """A day the caller has ruled out never appears in an offer again.
+
+        Run 336: "నాకు అసలుకి రేపు సరిపోదండి" -- tomorrow does not suit me at
+        all -- and the very next menu led with tomorrow. Re-offering a day that
+        was just refused is the clearest possible signal that nobody is
+        listening.
+
+        Implemented by marking that day's slots TAKEN, because `offer_slots`
+        already excludes taken slots and already searches forward for the next
+        free pair. A rejected day and a day promised to somebody else are the
+        same thing from the menu's point of view.
+        """
+        day = booking.rejected_day(text)
+        if day is None:
+            return False
+        blocked = [day.replace(hour=h).isoformat() for h in booking.OFFER_HOURS]
+        fresh = [b for b in blocked if b not in self.taken_slots]
+        if not fresh:
+            return False
+        self.taken_slots.extend(fresh)
+        # Rebuild the menu, since the one in hand may lead with that day.
+        self.offered = ()
+        return True
+
     def offer_line(self) -> str:
         """The two times, in words, ready to be put to the caller.
 
