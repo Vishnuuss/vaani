@@ -9,6 +9,32 @@
 4. Telugu + English first-class; architecture must extend to Hindi/Tamil/Kannada/Marathi without a rewrite.
 5. Runs on free startup credits (NVIDIA Inception / Google for Startups / AWS Activate / Azure).
 
+## Phase 10 -- deep general training of the SHARED layers (30 Aug)
+
+Layers 1, 2 and 4 are inherited unchanged by every client; Layer 3 is the only
+per-client text, and `test_layers_are_reusable.py` enforces the separation. So
+this work compounds: every hour spent here improves every client at once.
+
+Six categories, one subagent each, each writing a standalone section that is
+integrated afterwards rather than edited into the layers directly:
+
+| # | Category | Lands in |
+|---|---|---|
+| A | Real-world spoken Telugu -- how people build a sentence | Layer 1 |
+| B | Reacting with feeling to what was actually said | Layer 1 |
+| C | Comprehension -- answer the question that was asked | Layer 2 |
+| D | General sales craft, industry-neutral | Layer 2 |
+| E | Persuasion psychology for an Indian phone call | Layer 2 |
+| F | Objection handling -- the method, then the catalogue | Layer 2 |
+
+Hard constraint on all six: NO industry vocabulary. The register RULES are
+universal; the industry's WORDS come from Layer 3.
+
+Length is close to free here -- these layers are the CACHED prefix, and prompt
+length was measured on 29 Aug to predict first-token latency not at all (the
+same 28,850-char prompt returned 0.080s and 0.413s seconds apart). Noise is not
+free: a rule the model cannot act on inside one turn is worse than nothing.
+
 ## Next Step
 Place one live call and check the booking end to end: the caller names a time
 before the menu is offered, then picks the other option by its hour alone. Run

@@ -51,7 +51,12 @@ def test_a_time_named_before_the_menu_is_not_thrown_away():
     triage.apply(s, "ఎల్లుండి సాయంత్రం ఐదు ఇంటికి.")
     assert s.appointment_iso, (
         "he was asked what time suited him and he answered; that is a booking")
-    assert s.appointment_iso.startswith("2026-09-01T17:00"), s.appointment_iso
+    # Relative to TODAY, not to the day this test was written. The first version
+    # asserted the literal 2026-09-01 and passed for exactly one day.
+    booked = datetime.fromisoformat(s.appointment_iso)
+    assert booked.date() - datetime.now(IST).date() == timedelta(days=2), (
+        f"ఎల్లుండి is two days out; got {booked}")
+    assert booked.hour == 17, booked
 
 
 @pytest.mark.parametrize("said", [
