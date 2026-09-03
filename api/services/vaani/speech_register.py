@@ -73,6 +73,39 @@ SPOKEN: tuple[tuple[str, str], ...] = (
     ("ఇష్టపడుతున్నారు", "కావాలి"),
     ("తెలియజేస్తాను", "చెప్తాను"),
     ("ప్రారంభించ", "స్టార్ట్ చేయ"),
+
+    # --- General-life register, 3 Sep -------------------------------------
+    # "Telugu should be very good, how humans speak in general life."
+    #
+    # Nothing below is industry vocabulary -- these are the Sanskrit-derived
+    # nouns the model reaches for in ANY conversation, because the written
+    # corpus is full of them and spoken Telugu is not. A shopkeeper in
+    # Vijayawada uses the English word for every one of these.
+    #
+    # Phrases come before the single words inside them, or the phrase is never
+    # reached: "మీకు అనుకూలమైన సమయంలో" has to match whole rather than being
+    # arrived at by two passes.
+    ("మీకు అనుకూలమైన సమయంలో", "మీకు కుదిరే టైమ్‌లో"),
+    ("అనుకూలమైన సమయం", "కుదిరే టైమ్"),
+    ("ఏమైనా సందేహాలు", "ఏమైనా డౌట్స్"),
+    ("సందేహాలు", "డౌట్స్"),
+    ("సందేహం", "డౌట్"),
+    ("వివరాలను", "డీటెయిల్స్"),
+    ("వివరాలు", "డీటెయిల్స్"),
+    ("సమాచారం", "ఇన్ఫర్మేషన్"),
+    ("నిర్ణయం", "డిసిషన్"),
+    ("ప్రయోజనాలు", "బెనిఫిట్స్"),
+    ("ప్రయోజనం", "బెనిఫిట్"),
+    ("పరిమాణం", "సైజ్"),
+    ("అనుమతి", "పర్మిషన్"),
+    ("సంప్రదించండి", "కాంటాక్ట్ చేయండి"),
+    ("తదుపరి", "నెక్స్ట్"),
+    ("ప్రస్తుతం", "ఇప్పుడు"),
+    ("నివాసం", "ఇల్లు"),
+    ("వ్యయం", "ఖర్చు"),
+    # ఆసక్తి survives in speech, but the English word is what actually gets
+    # said, and Layer 1 already names this pair in its bookish/spoken table.
+    ("ఆసక్తి", "ఇంట్రెస్ట్"),
 )
 
 # "ఐదు గంట" -> "ఐదు గంటలు". Telugu marks the plural on the noun, and a count

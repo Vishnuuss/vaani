@@ -19,7 +19,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 
-from api.services.vaani import amounts, booking
+from api.services.vaani import amounts, booking, coach
 from api.services.vaani.corrections import is_correction
 
 
@@ -496,6 +496,11 @@ class CallState:
     # The caller has asked to be heard THIS turn. One turn only: he asked for
     # the floor, he gets the floor, and then the call carries on.
     wants_the_floor: bool = False
+    # Coaching cues already spent this call. Layer 2's "one rebuttal,
+    # never two" applies to the prompt as much as to the agent:
+    # re-injecting the same tactic on a caller who did not take it the
+    # first time is the prompt itself pushing a second time.
+    coached: set = field(default_factory=set)
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -812,5 +817,12 @@ class CallState:
                     lines.append(
                         f"THEY SAID: {self.last_user_text[:60]!r} "
                         "-- open with two words (సరే / మంచిది), then ask.")
+        # Just-in-time coaching. See coach.py: the depth of the objection
+        # and persuasion training lives OUT of the system prompt, so it
+        # costs nothing on the turns it is not needed -- which is most of
+        # them. Growing that catalogue never grows the prompt.
+        for line in coach.coach(self.last_user_text, self.coached):
+            lines.append(line)
+            self.coached.add(line.split("(", 1)[1].split(")", 1)[0])
         lines.append(f"TURN: {self.turn}   CALL_ELAPSED: {self.elapsed_s}s")
         return "\n".join(lines)
