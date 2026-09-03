@@ -692,7 +692,17 @@ class CallState:
                 lines.append(self.offer_line())
                 self.pending_ask = nxt
             elif nxt and self.questions.get(nxt):
-                lines.append(f'NEXT QUESTION TO ASK: "{self.questions[nxt]}"')
+                # "TO ASK" was read as a topic rather than a script. Run 336
+                # was handed `"మీది సొంత ఇల్లా, అపార్ట్‌మెంటా, లేదా కమర్షియల్
+                # ప్లేసా?"` and said "మీ ప్రాపర్టీ టైప్ ఏది?" instead -- the
+                # schema's field name, translated live, with the options thrown
+                # away. The caller answered "ఏం చెప్పాలి, నాకు తెలీదు".
+                #
+                # The client writes these questions; they name the options on
+                # purpose, because a caller told the options answers in one word.
+                lines.append(
+                    f'ASK THIS, IN THESE EXACT WORDS: "{self.questions[nxt]}" '
+                    "-- do not reword it and do not drop the options.")
                 self.pending_ask = nxt
                 # The client's complaint, in one word: "no confirmations". The
                 # reference agent opens nearly every turn with a two-word

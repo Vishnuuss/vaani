@@ -131,7 +131,7 @@ def test_a_non_booking_field_still_gets_its_normal_question():
     st = CallState(required_fields=["monthly_bill"],
                    questions={"monthly_bill": "బిల్లు ఎంత?"})
     block = st.render()
-    assert "NEXT QUESTION TO ASK" in block
+    assert "ASK THIS, IN THESE EXACT WORDS" in block
     assert "OFFER EXACTLY THESE TWO TIMES" not in block
 
 

@@ -71,7 +71,7 @@ def test_an_answer_is_not_mistaken_for_a_question(text):
 def test_the_checklist_is_withdrawn_while_answering(text):
     block = state(text).render()
     assert "STILL_NEED: []" in block
-    assert "NEXT QUESTION TO ASK" not in block, (
+    assert "ASK THIS, IN THESE EXACT WORDS" not in block, (
         "showing the next question is exactly what made the agent ask his name "
         "instead of answering whether solar was possible")
 
@@ -90,10 +90,10 @@ def test_the_checklist_returns_on_the_very_next_turn():
     st.render()
     st.last_user_text = "మాది కంపెనీ."
     block = st.render()
-    assert "NEXT QUESTION TO ASK" in block
+    assert "ASK THIS, IN THESE EXACT WORDS" in block
     assert "monthly_bill" in block
 
 
 def test_an_ordinary_answer_still_gets_the_next_question():
     block = state("మాది కంపెనీ.").render()
-    assert "NEXT QUESTION TO ASK" in block
+    assert "ASK THIS, IN THESE EXACT WORDS" in block
