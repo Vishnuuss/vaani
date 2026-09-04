@@ -127,3 +127,38 @@ def test_the_checklist_returns_on_the_very_next_turn():
 def test_an_ordinary_answer_still_gets_the_next_question():
     block = state("మాది కంపెనీ.").render()
     assert "ASK THIS, IN THESE EXACT WORDS" in block
+
+
+def test_a_curious_caller_does_not_get_the_same_question_forever():
+    """The two-ask budget must still bite when every turn is a question.
+
+    Probe run 580, after the answer-then-ask change: the caller asked five
+    things about the business and was asked "మీది సొంత ఇల్లా, అపార్ట్‌మెంటా,
+    లేదా కమర్షియల్ ప్లేసా?" on every single one -- six identical asks. Fixing
+    the stall must not buy a loop, which is the other half of what the client
+    reported: "if user asks another doubts it is looping".
+
+    commit_ask() is what spends the budget, and it fires on the agent actually
+    speaking, so the simulation has to call it the way brain_processor does.
+    """
+    st = state(ASKED[0])
+    asked = []
+    for _ in range(4):
+        block = st.render()
+        asked.append(st.pending_ask)
+        st.commit_ask()          # the agent said it
+
+    # monthly_bill twice, then it must move on -- never four of the same.
+    assert asked[0] == "monthly_bill"
+    assert asked.count("monthly_bill") <= 2, (
+        f"asked monthly_bill {asked.count('monthly_bill')} times: {asked}")
+    assert "customer_name" in asked, f"never moved to the next field: {asked}"
+
+
+def test_the_budget_is_shared_with_the_ordinary_path():
+    """A field asked twice while answering questions is spent, not refreshed."""
+    st = state(ASKED[0])
+    st.render(); st.commit_ask()
+    st.render(); st.commit_ask()
+    assert st.ask_counts.get("monthly_bill", 0) == 2
+    assert "monthly_bill" not in st.still_need
