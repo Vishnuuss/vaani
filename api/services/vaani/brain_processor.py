@@ -328,9 +328,7 @@ class ReplyFilter(FrameProcessor):
                 # Feed it back into the state block, which is where repetition
                 # is actually prevented now.
                 if self._injector is not None:
-                    said = self._spoken.strip()[:90]
-                    if said not in self._injector.state.asked:
-                        self._injector.state.asked.append(said)
+                    self._injector.state.asked.append(self._spoken.strip()[:90])
                     # The question was really put to the caller. Only now does
                     # it count against that field's two-ask budget.
                     self._injector.state.commit_ask()
@@ -392,22 +390,5 @@ class ReplyFilter(FrameProcessor):
                 logger.warning(
                     "guardrail (advisory): "
                     + "; ".join(f"{v.rule}({v.evidence})" for v in advisory))
-
-            # The reply is finished, so the question in it was really put to the
-            # caller. Counted HERE as well as on the next response's start
-            # frame, because on a text-chat turn there is no next start frame:
-            # `text_chat_runner` builds one pipeline per message, so this object
-            # is discarded before the frame that used to do the counting ever
-            # arrives. Every text-chat turn was therefore turn one, and
-            # MAX_ASKS_PER_FIELD could never bite.
-            #
-            # Safe to do both. `commit_ask` clears `pending_ask`, so the start
-            # frame finds nothing left to charge -- the second call is a no-op
-            # rather than a double count. `asked` is guarded the same way.
-            if self._injector is not None and self._spoken.strip():
-                said = self._spoken.strip()[:90]
-                if said not in self._injector.state.asked:
-                    self._injector.state.asked.append(said)
-                self._injector.state.commit_ask()
 
         await self.push_frame(frame, direction)
