@@ -69,19 +69,49 @@ def test_an_answer_is_not_mistaken_for_a_question(text):
 
 @pytest.mark.parametrize("text", ASKED)
 def test_the_checklist_is_withdrawn_while_answering(text):
+    """The CHECKLIST stays withdrawn. That is what run 218 was about.
+
+    The bare command "ASK THIS, IN THESE EXACT WORDS", sitting underneath a
+    LIST OF FIELDS, is what made the agent ask his name instead of answering.
+    The list is still gone. What comes back below is one ordered instruction
+    with the answer first -- a different thing, and the client asked for it by
+    name on 4 Sep: "it should not skip questions".
+    """
     block = state(text).render()
     assert "STILL_NEED: []" in block
-    assert "ASK THIS, IN THESE EXACT WORDS" not in block, (
-        "showing the next question is exactly what made the agent ask his name "
-        "instead of answering whether solar was possible")
+    assert "ASK THIS, IN THESE EXACT WORDS" not in block
 
 
 @pytest.mark.parametrize("text", ASKED)
-def test_no_ask_is_charged_for_a_turn_spent_answering(text):
+def test_the_answer_comes_first_and_the_question_second(text):
+    """Answer, THEN ask -- in that order, in one reply.
+
+    Withdrawing the question entirely made the call stall: measured on run 575,
+    the caller asked four things, was answered correctly four times, and the
+    agent asked its own question on only one of those turns. Qualification
+    stopped dead every time he was curious.
+    """
+    block = state(text).render()
+    assert "FIRST answer" in block
+    assert "THEN, in the SAME reply" in block
+    assert block.index("FIRST answer") < block.index("THEN, in the SAME reply")
+
+
+@pytest.mark.parametrize("text", ASKED)
+def test_a_long_answer_may_stand_alone(text):
+    """The escape hatch. Answering AND interrogating in one breath is run 218."""
+    block = state(text).render()
+    assert "leave the question out entirely" in block
+
+
+@pytest.mark.parametrize("text", ASKED)
+def test_the_field_is_still_charged_when_the_question_is_appended(text):
+    """If the question is asked, its ask budget must be spent -- otherwise the
+    two-ask cap cannot see it and the agent can ask forever."""
     st = state(text)
-    st.render()
-    assert st.pending_ask == "", (
-        "a turn spent answering must not consume a field's ask budget")
+    block = st.render()
+    if "THEN, in the SAME reply" in block and "leave the question out" in block:
+        assert st.pending_ask, "asked a field without charging it"
 
 
 def test_the_checklist_returns_on_the_very_next_turn():
