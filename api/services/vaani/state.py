@@ -655,45 +655,13 @@ class CallState:
             # model ask for those fields even when the prose forbids it. Prose
             # does not beat the checklist. Removing the checklist does.
             #
-            # ONE ORDERED INSTRUCTION, not a checklist and not two competing
-            # lines. That distinction is the whole of run 218's lesson: the
-            # failure there was a bare "ASK THIS" sitting under a LIST OF
-            # FIELDS, with the answer-first rule as prose underneath. The model
-            # obeyed the list.
-            #
-            # But withdrawing the question entirely, which is what this branch
-            # used to do, has its own failure and the client named it on 4 Sep:
-            # "it should not skip questions ... first it need to answer user
-            # question ... after that it need to get answer for all the
-            # questions". Measured on run 575: he asked four things, was
-            # answered correctly all four times, and the agent asked its own
-            # question on ONE of those turns. The call simply stalls -- every
-            # turn the caller is curious, the qualification stops dead.
-            #
-            # So the question comes back, SECOND, named in full, and explicitly
-            # subordinate to the answer. The checklist stays withdrawn.
-            #
-            # The escape hatch matters as much as the rule: if answering
-            # honestly takes the whole reply, asking as well would produce
-            # exactly the interrogation run 218 complained about. So a long
-            # answer is allowed to stand alone.
-            nxt = self.still_need[0] if self.still_need else ""
-            follow = ""
-            if nxt and not _is_booking_field(nxt) and self.questions.get(nxt):
-                follow = (
-                    " THEN, in the SAME reply and only after you have actually "
-                    f'answered, add this one question: "{self.questions[nxt]}" '
-                    "-- do not reword it, do not drop the options, and never "
-                    "ask it before the answer. If your answer needed more than "
-                    "two sentences, leave the question out entirely.")
-                self.pending_ask = nxt
-            else:
-                self.pending_ask = ""
+            # One turn only. The fields are still needed and come back next turn.
             lines.append(
-                "STILL_NEED: [] -- THE CALLER ASKED YOU SOMETHING. FIRST answer "
-                "THAT, properly. Answer from your facts, or say the team will "
-                "confirm the exact figure. Never invent a number, price, "
-                "location or brand." + follow)
+                "STILL_NEED: [] -- THE CALLER ASKED YOU SOMETHING. Answer THAT, "
+                "and nothing else. Ask NO question this turn, not even a short "
+                "one. Answer from your facts, or say the team will confirm the "
+                "exact figure. Never invent a number, price, location or brand.")
+            self.pending_ask = ""
         elif not self.still_need:
             # Every field is either answered or out of its two-ask budget.
             #
