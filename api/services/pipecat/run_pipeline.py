@@ -198,6 +198,31 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
         )
         if not name:
             continue
+        # A variable with no `ask` is DERIVED, not asked. `do_not_call`,
+        # `summary` and `lead_score` are things the extractor works out from the
+        # call; nobody wrote a spoken question for them because nobody would
+        # ever say one.
+        #
+        # They were reaching the checklist anyway, and `ask or name` then handed
+        # the model the literal string "summary" as a question to put to a
+        # caller -- the same defect state.py already documents for field keys:
+        # "Field KEYS are meaningless to the model."
+        #
+        # This is measurably why MB Solar behaves and the BS Wealth agents do
+        # not. wf2's six variables ALL carry a written `ask`. wf3 carries two
+        # real questions plus `do_not_call` and `summary`; wf6 carries five plus
+        # `lead_score`, `do_not_call` and `summary`. Probed 4 Sep, wf3 and wf6
+        # both looped and never progressed, which is the client's report
+        # exactly: "in other agents it is not remembering ... looping questions
+        # again and again".
+        #
+        # Checked on the RAW field, not on spoken_question(), because that falls
+        # back to `prompt` -- the extractor's English hint -- which is another
+        # thing no caller should ever hear.
+        written = (variable.get("ask") if isinstance(variable, dict)
+                   else getattr(variable, "ask", "")) or ""
+        if not written.strip():
+            continue
         ask = spoken_question(variable)
         questions.append({"field": name, "ask": ask or name})
 
