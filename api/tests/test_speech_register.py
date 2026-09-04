@@ -165,3 +165,64 @@ def test_honorifics_do_not_stack(said):
 def test_ordinary_andi_is_untouched():
     assert spoken("ఉందండి") == "ఉందండి"
     assert spoken("మంచిది, మీ పేరు చెప్పగలరా?") == "మంచిది, మీ పేరు చెప్పగలరా?"
+
+
+# --- The client's corrections, 4 Sep -----------------------------------------
+#
+# Two register defects, both about how a STRING OF CHARACTERS is read aloud
+# rather than which words are chosen:
+#
+#   "see like . as dot not chukka"
+#   "phone numbers should be read in english not telugu ... two at a time"
+#
+# చుక్క is the Telugu word for a dot, and it is the correct written word. It is
+# not what anyone says when reading out an email address or a website: a Telugu
+# speaker reading mbsolarhub@gmail.com says "gmail dot com", in English, every
+# time. The same speaker reading a mobile number back to confirm it says the
+# digits in English, in pairs, because that is how a number is checked.
+
+
+@pytest.mark.parametrize("said,want", [
+    ("gmail చుక్క com", "gmail dot com"),
+    ("mbsolarhub చుక్క com అని", "mbsolarhub dot com అని"),
+    ("www చుక్క mbsolarhub చుక్క com", "www dot mbsolarhub dot com"),
+])
+def test_chukka_is_said_as_dot(said, want):
+    assert spoken(said) == want
+
+
+@pytest.mark.parametrize("said,want", [
+    ("mbsolarhub@gmail.com", "mbsolarhub@gmail dot com"),
+    ("www.mbsolarhub.com", "www dot mbsolarhub dot com"),
+])
+def test_a_written_dot_inside_an_address_is_said(said, want):
+    assert spoken(said) == want
+
+
+def test_a_full_stop_is_not_turned_into_the_word_dot():
+    """The rule is about addresses, not punctuation. A sentence-ending full
+    stop must stay a full stop, or every reply ends with the word "dot"."""
+    assert spoken("సరే. మంచిది.") == "సరే. మంచిది."
+
+
+@pytest.mark.parametrize("said,want", [
+    ("మీ నంబర్ 9133992799 కదా",
+     "మీ నంబర్ nine one, three three, nine nine, two seven, nine nine కదా"),
+    ("91339 92799",
+     "nine one, three three, nine nine, two seven, nine nine"),
+])
+def test_a_mobile_number_is_read_in_english_two_at_a_time(said, want):
+    assert spoken(said) == want
+
+
+@pytest.mark.parametrize("amount", [
+    "78,000 రూపాయలు",
+    "30,000 రూపాయలు",
+    "2 kW",
+    "400 units",
+    "520010",
+])
+def test_amounts_and_short_numbers_are_left_alone(amount):
+    """Only a 10-digit mobile is a phone number. Turning ₹78,000 or a pincode
+    into spelled-out English pairs would be a new bug, and a worse one."""
+    assert spoken(amount) == amount

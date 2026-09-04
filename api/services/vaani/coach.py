@@ -229,7 +229,92 @@ BUYING: tuple[Cue, ...] = (
        "it, then your one question. Never answer it with a question.", 79),
 )
 
-CUES: tuple[Cue, ...] = TONE + OBJECTIONS + BUYING
+# ---------------------------------------------------------------------------
+# SEGMENT -- who the caller is, 4 Sep.
+#
+# "anything i ask from website it should answer perfectly ... it should explain
+# in simple way" -- the client.
+#
+# The first attempt at this wrote the whole of a client's service catalogue
+# into the node prompt: 9,811 -> 14,904 characters, and the eval's
+# verbatim-repetition failures went from 1 to 8. Instruction volume is not
+# free, and a drowning model repeats itself. So it sits here instead, one row
+# chosen by the caller's own words, costing nothing on the turns it misses.
+#
+# These rows are the KIND OF PLACE the caller is calling about, which is the
+# same set in every industry -- a society, a flat, a shed, a hospital, a
+# factory, an office. `test_the_catalogue_carries_no_industry_vocabulary`
+# holds this file to the same rule as Layers 1, 2 and 4: no trade words. What
+# each segment actually BUYS is Layer 3's job, per client. What this supplies
+# is the thing that makes a caller feel heard -- that you know what their kind
+# of place spends money on -- and the instruction to say it in one line and
+# hand the turn straight back.
+#
+# Weighted below TONE deliberately: a fact delivered in the wrong shape to an
+# angry or hurried caller is worse than no fact.
+# ---------------------------------------------------------------------------
+
+SEGMENT: tuple[Cue, ...] = (
+    _c("segment_society",
+       r"(సొసైటీ|సొసైటి|అసోసియేషన్|కాలనీ|లిఫ్ట్|కారిడార్|కామన్\s*ఏరియా"
+       r"|society|residents?\s+association|\bRWA\b|\bGHS\b|common\s+area|lift)",
+       "Their spend is the SHARED bill -- lifts, water pumps, corridor lights, "
+       "security -- not any one home. Name that in one line, it shows you "
+       "understood, then ask your question.", 76),
+    _c("segment_apartment",
+       r"(అపార్ట్|ఫ్లాట్|టాప్\s*ఫ్లోర్|apartment|\bflat\b|top\s+floor)",
+       "A shared building needs a specialist, not a general contractor, and "
+       "that is exactly what matching them is for. One line, then your "
+       "question.", 76),
+    _c("segment_warehouse",
+       r"(వేర్\s*హౌస్|గోడౌన్|గిడ్డంగి|warehouse|godown|logistics|cold\s*stor)",
+       "A large open shed is the easy case and they should hear that, and that "
+       "the structure is not put at risk. One line, then your question.", 75),
+    _c("segment_institution",
+       r"(స్కూల్|కాలేజ్|కాలేజీ|హాస్పిటల్|ఆసుపత్రి|కళాశాల|school|college"
+       r"|hospital|clinic|institut)",
+       "A hospital cannot lose power for a second, so it needs backup. A "
+       "campus is a daytime load, which is the easy case. Use the one they "
+       "said, one line, then your question.", 75),
+    _c("segment_industry",
+       r"(ఫ్యాక్టరీ|పరిశ్రమ|ఇండస్ట్రీ|మిల్లు|ప్లాంట్|factory|industr|\bmill\b"
+       r"|manufacturing\s+unit)",
+       "For them the electricity bill is a LARGE share of running cost, which "
+       "is why it is worth their time. Say that, quote no percentage, then ask "
+       "your question.", 75),
+    _c("segment_office",
+       r"(ఆఫీస్|ఆఫీసు|ఆఫిస్|office|showroom|shop\b)",
+       "Air conditioning and computers are the load, and the real worry is "
+       "disruption -- say the work happens without stopping their day. One "
+       "line, then your question.", 74),
+    _c("segment_land",
+       r"(ఖాళీ\s*(స్థలం|ల్యాండ్|భూమి)|ల్యాండ్|భూమి|స్థలం|పొలం"
+       r"|open\s+land|vacant\s+land|\bacres?\b)",
+       "They have opened a bigger option than the one you asked about. Ask "
+       "roughly how much land, and carry on -- do not price it and do not "
+       "promise what can be built.", 74),
+    _c("careers",
+       r"(ఉద్యోగ|జాబ్|కొలువు|ఇంటర్న్|రిక్రూట్|అప్లై"
+       r"|job|jobs|hiring|vacancy|vacancies|career|internship|resume|\bCV\b)",
+       "This is a job call, not a sale. STOP qualifying immediately. Take name "
+       "and number, say the team will call back, end warmly. Never discuss "
+       "salary or promise an interview -- you do not know.", 88),
+    _c("vendor_check",
+       r"(ఎలా\s*(verify|వెరిఫై|చెక్|నమ్మ)|నమ్మకమైన|వెండర్స్\s*ఎలా"
+       r"|how.{0,20}(verified|checked)|genuine|verified\s*ఎలా|trustworthy)",
+       "They are checked and approved before they are listed -- credentials "
+       "and real reviews -- and the caller sees past work before choosing. One "
+       "line, then your question.", 78),
+    _c("response_time",
+       r"(ఎప్పుడు\s*(కాల్|call|ఫోన్|phone|కాంటాక్ట్|contact|వస్తారు|చేస్తారు)"
+       r"|ఎంత\s*టైమ్\s*లో|ఎప్పటిలోగా"
+       r"|when\s+will\s+(they|someone|i|we)|how\s+soon|how\s+long\s+will\s+it\s+take)",
+       "Give a real window, not 'soon' -- usually a few hours, most within a "
+       "day. Then confirm the number you are going to pass on.", 77),
+)
+
+
+CUES: tuple[Cue, ...] = TONE + OBJECTIONS + BUYING + SEGMENT
 
 
 def cues_for(text: str) -> list[Cue]:

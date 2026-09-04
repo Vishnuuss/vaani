@@ -163,3 +163,51 @@ def test_the_catalogue_carries_no_industry_vocabulary():
         low = cue.say.lower()
         for word in industry:
             assert word not in low, f"{cue.name} names {word!r}"
+
+
+# --- SEGMENT: who the caller is, 4 Sep ---------------------------------------
+#
+# "anything i ask from website it should answer perfectly ... not simply saying
+# like brain roting ... it should explain in simple way"
+#
+# The first attempt wrote a client's whole service catalogue into the node
+# prompt: 9,811 -> 14,904 characters, and the eval's verbatim-repetition
+# failures went from 1 to 8. So the part that GENERALISES -- what kind of place
+# the caller is ringing about, which is the same set in every industry -- lives
+# here, one row chosen by the caller's own words. What that segment actually
+# buys stays in Layer 3, per client, because this file is read on every call
+# for every client.
+
+
+@pytest.mark.parametrize("said,cue", [
+    ("మా సొసైటీలో లిఫ్ట్ కి కరెంట్ ఎక్కువ అవుతుంది", "segment_society"),
+    ("we are a group housing society", "segment_society"),
+    ("నేను అపార్ట్మెంట్ లో ఉంటాను", "segment_apartment"),
+    ("మాది warehouse ఉంది", "segment_warehouse"),
+    ("హాస్పిటల్ కి కావాలి", "segment_institution"),
+    ("our school needs solar", "segment_institution"),
+    ("మాకు factory ఉంది", "segment_industry"),
+    ("మా ఆఫీసుకి కావాలి", "segment_office"),
+    ("ఖాళీ ల్యాండ్ ఉంది", "segment_land"),
+    ("job ఉందా మీ దగ్గర", "careers"),
+    ("వెండర్స్ ని ఎలా verify చేస్తారు", "vendor_check"),
+    ("ఎప్పుడు call చేస్తారు", "response_time"),
+])
+def test_the_segment_cues_fire_on_the_callers_own_words(said, cue):
+    assert cue in {c.name for c in C.cues_for(said)}
+
+
+def test_a_segment_cue_never_outranks_anger():
+    """A man who is angry about his society's bill gets the anger row. The
+    fact is useless in the wrong shape -- that is the rule TONE already sets."""
+    lines = C.coach("మా సొసైటీ గురించి అడిగితే చిరాకు వస్తుంది నాకు")
+    assert lines and "angry" in lines[0]
+
+
+def test_every_cue_fits_the_block():
+    for cue in C.CUES:
+        assert len(f"COACH ({cue.name}): {cue.say}") <= C.MAX_CHARS, cue.name
+
+
+def test_an_ordinary_answer_earns_no_segment_row():
+    assert C.coach("నా పేరు రమేష్") == []

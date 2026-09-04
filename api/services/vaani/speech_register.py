@@ -325,6 +325,72 @@ def _arithmetic(text: str) -> str:
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
+# --- Addresses and phone numbers, 4 Sep --------------------------------------
+#
+# The client, on two register defects that are about how a STRING is READ rather
+# than which word is chosen:
+#
+#     "see like . as dot not chukka"
+#     "phone numbers should be read in english not telugu ... two at a time"
+#
+# చుక్క is the correct WRITTEN Telugu word for a dot and the wrong SPOKEN one.
+# A Telugu speaker reading out mbsolarhub@gmail.com says "gmail dot com", in
+# English, every time -- an address is a piece of English text and gets read as
+# one. The model reaches for చుక్క because that is what the written corpus has.
+#
+# The rule is about ADDRESSES, not punctuation. A dot only becomes the word
+# "dot" when it sits inside a token -- between an alphanumeric and a letter with
+# no space after it. A sentence-ending full stop has a space or an end-of-string
+# after it and is left alone, or every reply would end with the word "dot".
+_CHUKKA = re.compile(r"\s*చుక్క\s*")
+_INLINE_DOT = re.compile(r"(?<=[A-Za-z0-9])\.(?=[A-Za-z])")
+
+
+def _dot(text: str) -> str:
+    if "చుక్క" in text:
+        text = _CHUKKA.sub(" dot ", text)
+    text = _INLINE_DOT.sub(" dot ", text)
+    return re.sub(r" {2,}", " ", text).strip() if "dot" in text else text
+
+
+_ENGLISH_DIGIT = {
+    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four",
+    "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "nine",
+}
+
+# A run of digits that may carry spaces or hyphens inside it. The comma is
+# deliberately NOT in the class: "78,000" is an amount, and the whole point of
+# the length check below is that an amount must never be spelled out.
+_DIGIT_RUN = re.compile(r"(?<![\d,.])\+?\d[\d\s-]*\d(?![\d,.])")
+
+
+def _phone(text: str) -> str:
+    """Read a mobile number back in English, two digits at a time.
+
+    Only a TEN-digit number is a phone number. A pincode (520010), a subsidy
+    figure (78,000), a capacity (2 kW) and a unit count (400) are all numbers
+    too, and spelling any of them out in English pairs would be a new defect
+    worse than the one being fixed -- so the length is checked, not the shape
+    of the surrounding sentence.
+
+    Pairs, because a number is read back to be CHECKED. "nine one, three three"
+    is how a person confirms a number down a line; ten digits in an unbroken
+    stream is how a machine does it.
+    """
+    def fix(m: "re.Match[str]") -> str:
+        raw = m.group(0)
+        digits = re.sub(r"\D", "", raw)
+        # A number given with the country code is still a ten-digit mobile.
+        if len(digits) == 12 and digits.startswith("91"):
+            digits = digits[2:]
+        if len(digits) != 10:
+            return raw
+        pairs = [digits[i:i + 2] for i in range(0, 10, 2)]
+        return ", ".join(" ".join(_ENGLISH_DIGIT[d] for d in pair)
+                         for pair in pairs)
+    return _DIGIT_RUN.sub(fix, text)
+
+
 def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     """Rewrite one piece of generated speech into the register people use.
 
@@ -334,7 +400,7 @@ def spoken(text: str, names: tuple[str, ...] = ()) -> str:
     """
     if not text:
         return text
-    out = _oclock_case(_hours(_ranges(_arithmetic(text))))
+    out = _oclock_case(_hours(_ranges(_arithmetic(_dot(_phone(text))))))
     out = _vocative(out)
     if names:
         out = _names(out, names)
