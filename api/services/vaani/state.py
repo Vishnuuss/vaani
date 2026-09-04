@@ -448,43 +448,6 @@ class CallState:
     def elapsed_s(self) -> int:
         return int(time.time() - self.started_at)
 
-    # Fields that must survive a turn boundary. Everything else is either
-    # rebuilt per turn (pending_ask, last_user_text) or configuration
-    # (required_fields, questions) that comes from the workflow.
-    #
-    # A phone call keeps ONE CallState for its whole length, so this never
-    # mattered there. Text chat does not: `text_chat_runner` builds a fresh
-    # pipeline for every message and restores only `messages`,
-    # `gathered_context` and `tool_state` from its checkpoint. The Vaani brain
-    # was therefore starting from zero on every single turn, which means
-    # `ask_counts` was always empty and MAX_ASKS_PER_FIELD could never bite,
-    # and `asked` was always empty so `_is_repeat` could never fire.
-    #
-    # Probed 4 Sep: wf3 asked its question on five consecutive turns and wf6 on
-    # three, with no repair line and no abandonment. Both are the client's
-    # "looping questions again and again". The eval battery runs on text chat
-    # too, so its repetition failures have been measuring this and not the
-    # agent.
-    PERSISTED = (
-        "known", "ask_counts", "asked", "last_asked", "objections", "turn",
-        "disqualified", "disqualify_reason", "misheard_last_turn",
-        "next_step_agreed", "buying_signal", "refusals", "no_more_questions",
-        "must_end", "end_reason", "appointment_iso", "taken_slots", "reacted",
-    )
-
-    def snapshot(self) -> dict:
-        """The part of the state a later turn needs, JSON-safe."""
-        return {k: getattr(self, k) for k in self.PERSISTED
-                if getattr(self, k, None) not in (None, "", 0, [], {})}
-
-    def restore(self, data: dict | None) -> None:
-        """Re-seed from `snapshot`. Unknown keys are ignored, not trusted."""
-        if not isinstance(data, dict):
-            return
-        for k in self.PERSISTED:
-            if k in data:
-                setattr(self, k, data[k])
-
     def learn(self, field_name: str, value: str) -> None:
         if value:
             self.known[field_name] = value

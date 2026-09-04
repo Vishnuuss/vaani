@@ -121,11 +121,6 @@ def default_text_chat_checkpoint() -> dict[str, Any]:
         "messages": [],
         "gathered_context": {},
         "tool_state": {},
-        # A phone call keeps one CallState for its whole length. Text chat
-        # rebuilds the pipeline every message, so without this the Vaani brain
-        # restarted from zero each turn: `ask_counts` empty, so the two-ask cap
-        # never bit, and `asked` empty, so the repeat guard never fired.
-        "vaani_state": {},
     }
 
 
@@ -683,9 +678,6 @@ async def execute_text_chat_pending_turn(
         text_state_injector, text_reply_filter = build_vaani_brain(
             workflow_graph, context, _vaani_prompt,
             workflow_name=getattr(workflow, "name", "") or "")
-        # Carry the previous turn's counters forward. Without it every turn is
-        # turn one, and no rule that counts anything can work.
-        text_state_injector.state.restore(base_checkpoint.get("vaani_state"))
     except Exception as e:
         logger.error(f"Vaani brain DISABLED for text chat (setup failed): {e!r}")
 
@@ -808,8 +800,6 @@ async def execute_text_chat_pending_turn(
         "messages": encoded_messages,
         "gathered_context": encoded_gathered_context,
         "tool_state": encoded_tool_state,
-        "vaani_state": jsonable_encoder(
-            text_state_injector.state.snapshot() if text_state_injector else {}),
     }
 
     trace_url = get_trace_url(trace_id, org_id=workflow.organization_id)
