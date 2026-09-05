@@ -253,7 +253,33 @@ def build_speculation_processors(workflow_graph, llm, context,
         format_prompt=lambda text: text,
         has_recordings=has_recordings,
     )
-    generate = make_llm_generator(
+
+    # FAIL CLOSED. A speculative reply that HITS is spoken to the caller, so it
+    # must be produced by the same prompt and the same state block as a normal
+    # reply. Neither is true here:
+    #
+    #   * `system_prompt` above is Dograh's raw node text, not
+    #     `compile_vaani_system_prompt`, which is what is actually installed on
+    #     the LLM service.
+    #   * `get_state_block` returned "". The state block is where EVERY
+    #     protected behaviour lives -- answer the caller's question before
+    #     asking your own, MAX_ASKS_PER_FIELD, the repeat guard, must_end. A hit
+    #     would speak a reply with none of them.
+    #
+    # This is inert today only because `saarika:v2.5` emits no interim
+    # transcripts, so the probe never fires. Switching STT to
+    # `saaras:v3-realtime` arms it. Rather than leave that landmine behind a
+    # config flag, refuse to build at all until the assembly is made identical
+    # -- the caller never hears a reply built from a different prompt.
+    raise NotImplementedError(
+        "speculation is disabled: it generates from compose_system_prompt_for_node "
+        "with an empty state block, so a HIT would speak a reply without "
+        "answer-first, the two-ask cap or the repeat guard. Rebuild it on "
+        "compile_vaani_system_prompt + state.render() + MODE_PROTOCOL before "
+        "enabling."
+    )
+
+    generate = make_llm_generator(  # noqa: F821  (unreachable until rebuilt)
         llm,
         system_prompt=system_prompt,
         get_history=lambda: [

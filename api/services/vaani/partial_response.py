@@ -105,9 +105,29 @@ class PartialResponder(FrameProcessor):
 
             elif isinstance(frame, UserStoppedSpeakingFrame):
                 promoted = self._promote(frame)
+                # The event carries on the way it was going; the aggregator's
+                # own bookkeeping depends on that.
                 await self.push_frame(frame, direction)
                 if promoted is not None:
-                    await self.push_frame(promoted, direction)
+                    # The transcript ALWAYS goes downstream, whatever direction
+                    # the turn-end event arrived in.
+                    #
+                    # `UserStoppedSpeakingFrame` is not produced by the
+                    # transport. Its only live emitter is the user aggregator,
+                    # via `broadcast_frame`, which pushes one copy downstream
+                    # and one UPSTREAM. This processor sits BEFORE the
+                    # aggregator in `vaani/pipeline.py`, so the only copy it
+                    # ever receives is the upstream one -- and it was pushing
+                    # the promoted transcript back that way too, toward the STT,
+                    # where nothing consumes it. The LLM never saw it.
+                    #
+                    # It also sets `_promoted`, which suppresses the genuine
+                    # final arriving next, so the turn would have ended with the
+                    # agent holding no text at all.
+                    #
+                    # Every existing test drives DOWNSTREAM, which is the one
+                    # direction this branch never sees live.
+                    await self.push_frame(promoted, FrameDirection.DOWNSTREAM)
                 return
 
         except Exception as e:  # a diagnostics path must never drop a call

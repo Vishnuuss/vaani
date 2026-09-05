@@ -30,13 +30,15 @@ from api.services.vaani.partial_response import PartialResponder
 
 
 class _Sink:
-    """Captures what the processor pushes downstream."""
+    """Captures what the processor pushes, AND which way it pushed it."""
 
     def __init__(self):
         self.frames = []
+        self.pushes = []          # (frame, direction) pairs
 
     async def __call__(self, frame, direction):
         self.frames.append(frame)
+        self.pushes.append((frame, direction))
 
 
 def _wire(responder, sink):
@@ -120,3 +122,58 @@ async def test_interim_frames_still_flow_downstream():
     r = _wire(PartialResponder(), sink)
     await r.process_frame(InterimTranscriptionFrame("five", "u", ""), FrameDirection.DOWNSTREAM)
     assert any(isinstance(f, InterimTranscriptionFrame) for f in sink.frames)
+
+
+# --- direction, 5 Sep --------------------------------------------------------
+#
+# Every test above drives DOWNSTREAM, and that is the direction this processor
+# never sees for the frame it acts on.
+#
+# `UserStoppedSpeakingFrame` is not produced by the transport. Its only live
+# emitter is the user aggregator, via `broadcast_frame`, which pushes one copy
+# downstream and one UPSTREAM. `PartialResponder` sits BEFORE the aggregator in
+# `vaani/pipeline.py`, so the only copy reaching it is the upstream one -- and
+# it pushed the promoted transcript back in that same direction, toward the STT,
+# where nothing consumes it. The LLM never saw it.
+#
+# It also set `_promoted`, which suppresses the genuine final that arrives next.
+# The result on a live call would be a turn where the agent receives no text at
+# all and says nothing until the idle watchdog fires.
+#
+# Inert today only because saarika:v2.5 emits no interim frames. Switching STT
+# to saaras:v3-realtime arms it, which is why this is fixed FIRST.
+
+
+@pytest.mark.asyncio
+async def test_the_promoted_transcript_always_goes_downstream():
+    sink = _Sink()
+    r = _wire(PartialResponder(), sink)
+
+    await r.process_frame(InterimTranscriptionFrame("ఐదు వేలు", "", ""),
+                          FrameDirection.DOWNSTREAM)
+    # The aggregator broadcasts, so the copy that arrives here is UPSTREAM.
+    await r.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    promoted = [(f, d) for f, d in sink.pushes
+                if isinstance(f, TranscriptionFrame)]
+    assert promoted, "nothing was promoted from the partial"
+    frame, direction = promoted[0]
+    assert frame.text == "ఐదు వేలు"
+    assert direction is FrameDirection.DOWNSTREAM, (
+        "pushed upstream, toward the STT -- the LLM never receives it")
+
+
+@pytest.mark.asyncio
+async def test_the_turn_end_frame_keeps_its_own_direction():
+    """Only the promoted transcript is redirected. The event itself must carry
+    on the way it was going, or the aggregator's own bookkeeping breaks."""
+    sink = _Sink()
+    r = _wire(PartialResponder(), sink)
+
+    await r.process_frame(InterimTranscriptionFrame("సరే", "", ""),
+                          FrameDirection.DOWNSTREAM)
+    await r.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    ends = [(f, d) for f, d in sink.pushes
+            if isinstance(f, UserStoppedSpeakingFrame)]
+    assert ends and ends[0][1] is FrameDirection.UPSTREAM
