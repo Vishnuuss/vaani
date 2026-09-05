@@ -19,6 +19,7 @@ from api.services.configuration.options import (
 )
 from api.schemas.workflow_configurations import (
     DEFAULT_STT_FINALISATION_BUDGET_SECS,
+    DEFAULT_TTS_TOKEN_STREAMING,
 )
 from api.services.configuration.registry import ServiceProviders
 from api.services.pipecat.gemini_json_schema_adapter import (
@@ -585,13 +586,18 @@ def create_stt_service(
 
 @_report_service_factory_failures(ErrorSource.TTS, config_section="tts")
 def create_tts_service(
-    user_config, audio_config: "AudioConfig", correlation_id: str | None = None
+    user_config,
+    audio_config: "AudioConfig",
+    correlation_id: str | None = None,
+    stream_tokens: bool = DEFAULT_TTS_TOKEN_STREAMING,
 ):
     """Create and return appropriate TTS service based on user configuration
 
     Args:
         user_config: User configuration containing TTS settings
         transport_type: Type of transport (e.g., 'twilio', 'webrtc')
+        stream_tokens: Send tokens to the TTS as they arrive instead of
+            aggregating whole sentences first. Cartesia only; see the branch.
     """
     logger.info(
         f"Creating TTS service: provider={user_config.tts.provider}, model={user_config.tts.model}"
@@ -709,6 +715,34 @@ def create_tts_service(
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
+            # "it should speak while generating only not after complete"
+            # -- the client, 5 Sep, and he was reading the symptom correctly.
+            #
+            # The DEEPGRAM branch above has carried TextAggregationMode.TOKEN
+            # since run 3, with a comment reasoning explicitly about CARTESIA:
+            # "Cartesia is a websocket service and accepts incremental text, so
+            # it keeps its own prosody context across the stream." Cartesia
+            # itself never got the flag. pipecat's own Cartesia docstring says
+            # the default costs "~200-300ms of latency per sentence" and ends
+            # "TODO: Consider making TOKEN the default for Cartesia in 1.0."
+            #
+            # For THIS agent it is worse than that generic figure.
+            # `SimpleTextAggregator` holds a sentence until a NON-WHITESPACE
+            # character arrives AFTER its terminal punctuation, and a Vaani
+            # reply is typically a single sentence ending in a question mark.
+            # That character never arrives, so the sentence is released only by
+            # the flush on LLMFullResponseEndFrame -- the TTS gets nothing until
+            # the LLM has finished the whole reply. The measured "TTS 69ms" is
+            # clocked from the aggregated frame, which is why it looked free.
+            #
+            # Opt-in per workflow, not on by default: no test can judge Telugu
+            # prosody. It ships behind a flag and is listened to before it is
+            # trusted anywhere else.
+            **(
+                {"text_aggregation_mode": TextAggregationMode.TOKEN}
+                if stream_tokens
+                else {}
+            ),
         )
     elif user_config.tts.provider == ServiceProviders.INWORLD.value:
         voice = getattr(user_config.tts, "voice", None) or "Ashley"

@@ -124,6 +124,18 @@ DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 #
 # The losers are cancelled as soon as the winner produces content and the input
 # is ~96% cached, so a third copy bills a few dozen reasoning tokens.
+# "it should speak while generating only not after complete" -- the client,
+# 5 Sep. Cartesia aggregates whole SENTENCES before synthesising by default, and
+# `SimpleTextAggregator` will not release one until a non-whitespace character
+# arrives after its terminal punctuation. A Vaani reply is usually a single
+# sentence ending in a question mark, so that character never comes and the TTS
+# receives nothing until the LLM has finished the entire reply. pipecat's own
+# Cartesia docstring puts the generic cost at "~200-300ms per sentence".
+#
+# Off by default because no test can judge Telugu prosody. Turned on per
+# workflow, listened to, and only then rolled out.
+DEFAULT_TTS_TOKEN_STREAMING = False
+
 DEFAULT_LLM_HEDGE = 3
 # How long the turn-stop strategy will wait for the STT's FINAL transcript,
 # measured from true speech end.
@@ -289,6 +301,7 @@ class WorkflowConfigurationDefaults(BaseModel):
     turn_wait_for_transcript: bool = DEFAULT_TURN_WAIT_FOR_TRANSCRIPT
     speculation_enabled: bool = DEFAULT_SPECULATION_ENABLED
     llm_hedge: int = Field(default=DEFAULT_LLM_HEDGE, ge=1, le=3)
+    tts_token_streaming: bool = DEFAULT_TTS_TOKEN_STREAMING
     stt_finalisation_budget_secs: float = Field(
         default=DEFAULT_STT_FINALISATION_BUDGET_SECS, ge=0.2, le=3.0)
     dictionary: str = ""

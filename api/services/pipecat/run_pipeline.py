@@ -18,6 +18,7 @@ from api.schemas.workflow_configurations import (
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
     DEFAULT_SPECULATION_ENABLED,
     DEFAULT_STT_FINALISATION_BUDGET_SECS,
+    DEFAULT_TTS_TOKEN_STREAMING,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_TURN_START_STRATEGY,
 )
@@ -785,6 +786,8 @@ async def _run_pipeline_impl(
             user_config,
             audio_config,
             correlation_id=mps_correlation_id,
+            stream_tokens=bool(run_configs.get(
+                "tts_token_streaming", DEFAULT_TTS_TOKEN_STREAMING)),
         )
         # The conversational LLM is the only one a caller waits on and the only
         # one whose output is spoken aloud, so it is the only one that hedges or
