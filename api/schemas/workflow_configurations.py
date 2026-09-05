@@ -132,9 +132,23 @@ DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 # receives nothing until the LLM has finished the entire reply. pipecat's own
 # Cartesia docstring puts the generic cost at "~200-300ms per sentence".
 #
-# Off by default because no test can judge Telugu prosody. Turned on per
-# workflow, listened to, and only then rolled out.
-DEFAULT_TTS_TOKEN_STREAMING = False
+# Shipped off, listened to, and now ON by default.
+#
+# The client made one real call on wf2 with it enabled -- run 776, 14 turns --
+# and confirmed it sounds right. Measured against run 392 on the same agent
+# before it:
+#
+#     p50 TOTAL   1.096s -> 0.877s
+#     LLM         0.527s -> 0.351s
+#     TTS first   0.069s -> 0.106s
+#
+# TTS first-audio RISING while TOTAL falls is the signature of the change
+# working: the number now covers a short opening chunk instead of being clocked
+# from a whole buffered sentence, so it is measuring less of the turn.
+#
+# Default True so every agent built from here gets it without anyone
+# remembering to set it.
+DEFAULT_TTS_TOKEN_STREAMING = True
 
 DEFAULT_LLM_HEDGE = 3
 # How long the turn-stop strategy will wait for the STT's FINAL transcript,

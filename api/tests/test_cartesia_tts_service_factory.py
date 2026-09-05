@@ -124,12 +124,24 @@ def _audio():
     )
 
 
-def test_token_streaming_is_off_unless_asked_for():
-    """Default must not change behaviour for any existing client."""
+def test_token_streaming_is_on_by_default():
+    """Verified on a real call (run 776) and confirmed by the client, so it is
+    the default -- every agent built from here gets it without being told."""
     with patch(
         "api.services.pipecat.service_factory.CartesiaTTSService"
     ) as mock_service:
         create_tts_service(_cartesia_config(), _audio())
+
+    kwargs = mock_service.call_args.kwargs
+    assert kwargs["text_aggregation_mode"] is TextAggregationMode.TOKEN
+
+
+def test_token_streaming_can_still_be_turned_off():
+    """One config write must be able to undo it on any single agent."""
+    with patch(
+        "api.services.pipecat.service_factory.CartesiaTTSService"
+    ) as mock_service:
+        create_tts_service(_cartesia_config(), _audio(), stream_tokens=False)
 
     kwargs = mock_service.call_args.kwargs
     assert kwargs.get("text_aggregation_mode") is None
