@@ -1440,6 +1440,20 @@ async def _run_pipeline_impl(
                     "tts_secs": round(tts_ttfb, 4) or None,
                     "heard_secs": (round(endpoint + llm_ttfb + tts_ttfb, 4)
                                    if endpoint is not None else None),
+                    # How long the TTS sat on text before it began synthesising.
+                    #
+                    # pipecat has always computed this and we discarded it
+                    # before persisting, which is why Cartesia's sentence
+                    # buffering could cost 100-400ms per turn and remain
+                    # invisible: `tts_secs` is clocked from the AGGREGATED
+                    # frame, so it measures synthesis and never the wait in
+                    # front of it. With token streaming on this should sit at
+                    # ~0; if it climbs again, the aggregation mode has been
+                    # lost somewhere and the turn got slower for a reason no
+                    # other field would show.
+                    "text_aggregation_secs": (
+                        round(float(breakdown.text_aggregation.duration_secs), 4)
+                        if breakdown.text_aggregation else None),
                     "ttfb": ttfbs,
                 }
                 message = {"type": "rtf-latency-breakdown", "payload": payload}
