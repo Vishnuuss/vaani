@@ -361,7 +361,14 @@ _ENGLISH_DIGIT = {
 # A run of digits that may carry spaces or hyphens inside it. The comma is
 # deliberately NOT in the class: "78,000" is an amount, and the whole point of
 # the length check below is that an amount must never be spelled out.
-_DIGIT_RUN = re.compile(r"(?<![\d,.])\+?\d[\d\s-]*\d(?![\d,.])")
+#
+# The guards are about a comma or dot that is PART OF A NUMBER, which is one
+# followed by a digit -- "78,000", "3.5". A comma that is punctuation must not
+# disqualify the number before it. Run 713 read the office details as
+# "91339 92799, 79974 66699" and spelled out only the SECOND, because the first
+# had a comma after it and the old lookahead refused any comma at all.
+_DIGIT_RUN = re.compile(
+    r"(?<!\d)(?<![\d][,.])\+?\d[\d\s-]*\d(?!\d)(?![,.]\d)")
 
 
 def _phone(text: str) -> str:

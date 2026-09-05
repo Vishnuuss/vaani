@@ -226,3 +226,34 @@ def test_amounts_and_short_numbers_are_left_alone(amount):
     """Only a 10-digit mobile is a phone number. Turning ₹78,000 or a pincode
     into spelled-out English pairs would be a new bug, and a worse one."""
     assert spoken(amount) == amount
+
+
+def test_a_number_followed_by_a_comma_is_still_a_phone_number():
+    """Found live on run 713, reading the office details out:
+
+        "ఫోన్ నంబర్లు 91339 92799, 79974 66699, ఇమెయిల్ ..."
+
+    The second number was spelled out and the FIRST was not, because the guard
+    against matching inside "78,000" refused any number with a comma after it.
+    A comma is only part of a number when a digit follows it.
+    """
+    said = spoken("ఫోన్ నంబర్లు 91339 92799, 79974 66699")
+    assert "9133992799" not in said.replace(" ", "")
+    assert said.count("nine one, three three, nine nine, two seven, nine nine") == 1
+    assert "seven nine, nine seven, four six, six six, nine nine" in said
+
+
+def test_a_number_at_the_end_of_a_sentence_is_still_a_phone_number():
+    said = spoken("నా నంబర్ 9133992799.")
+    assert "nine one, three three" in said
+
+
+@pytest.mark.parametrize("text", [
+    "బిల్లు 78,000 రూపాయలు",
+    "సబ్సిడీ 1,50,000 వరకు",
+    "పిన్ కోడ్ 520010",
+    "3.5 kW సిస్టమ్",
+])
+def test_thousands_separators_and_decimals_are_still_safe(text):
+    """The reason the comma guard existed. It must keep working."""
+    assert spoken(text) == text
