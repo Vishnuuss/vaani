@@ -143,6 +143,16 @@ class PartialResponder(FrameProcessor):
 
     def _promote(self, turn_end_frame: Frame) -> TranscriptionFrame | None:
         """Return the transcript to inject, or None to change nothing."""
+        if self._promoted:
+            # AT MOST ONCE PER TURN.
+            #
+            # `_promoted` was only ever read on the TranscriptionFrame path, to
+            # suppress the late final. Nothing stopped a SECOND turn-end event
+            # from promoting the same stale `_latest` again -- and with a
+            # realtime STT there are many turn-end events per utterance, so the
+            # same words would be injected repeatedly. Run 780 is what that
+            # looks like from the outside: "హలో" twenty-two times.
+            return None
         if self._have_final:
             self._reset_turn()
             return None

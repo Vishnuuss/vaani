@@ -177,3 +177,22 @@ async def test_the_turn_end_frame_keeps_its_own_direction():
     ends = [(f, d) for f, d in sink.pushes
             if isinstance(f, UserStoppedSpeakingFrame)]
     assert ends and ends[0][1] is FrameDirection.UPSTREAM
+
+
+@pytest.mark.asyncio
+async def test_a_turn_is_promoted_at_most_once():
+    """`_promoted` was only read on the TranscriptionFrame path, to suppress the
+    late final. Nothing stopped a SECOND turn-end event from promoting the same
+    stale `_latest` again -- and a realtime STT produces many turn-end events
+    per utterance, which is how run 780 injected "హలో" over and over."""
+    sink = _Sink()
+    r = _wire(PartialResponder(), sink)
+
+    await r.process_frame(InterimTranscriptionFrame("హలో", "", ""),
+                          FrameDirection.DOWNSTREAM)
+    await r.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await r.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await r.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    promoted = [f for f in sink.frames if isinstance(f, TranscriptionFrame)]
+    assert len(promoted) == 1, f"promoted {len(promoted)} times: {promoted}"

@@ -73,7 +73,10 @@ from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     StartFrame,
     TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import STTService
 from pipecat.transcriptions.language import Language
@@ -117,6 +120,19 @@ class SarvamRealtimeSTTService(STTService):
         self._ws: Any = None
         self._receive_task: asyncio.Task | None = None
         self._user_id = ""
+        # The last FINAL text emitted inside the current utterance.
+        #
+        # Sarvam's realtime endpoint sends a `final` per stabilised SEGMENT, not
+        # per utterance, and it re-sends one whenever the decoder re-scores. The
+        # service pushes each as a `TranscriptionFrame` with `finalized=True`,
+        # which downstream is a whole TURN -- so one word became many turns.
+        #
+        # Measured on run 780, the first live call after this model was enabled:
+        # the user transcript is "హలో" twenty-two times, with fragments "హ"
+        # among them. The caller said it once. The LLM was then re-reading a
+        # context full of duplicates and took 3.668s on a single turn, against
+        # 0.351s on the previous call. Reverted within the hour.
+        self._last_final = ""
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -233,6 +249,26 @@ class SarvamRealtimeSTTService(STTService):
                 text, self._user_id, time_now_iso8601(),
                 self._language_enum(), result=msg))
         elif "final" in kind:
+            # ONE turn per utterance, not one per segment.
+            #
+            # A `final` here means "this segment is stable", not "the caller has
+            # stopped". The service's own header says it: "This service reports
+            # words. It does not decide turns." Pushing every final as a
+            # finalized TranscriptionFrame did decide turns, and got it wrong 22
+            # times on run 780.
+            #
+            # Suppressed when the text has not GROWN. A re-scored repeat of what
+            # was already said carries no new words, so it has nothing to add to
+            # a turn that is already under way. A genuine continuation --
+            # "నా పేరు" then "నా పేరు రమేష్" -- does grow, and is emitted so the
+            # aggregator holds the whole utterance rather than its first
+            # fragment.
+            if text == self._last_final or (
+                self._last_final and text in self._last_final
+            ):
+                logger.debug(f"[sarvam-realtime] duplicate final ignored: {text!r}")
+                return
+            self._last_final = text
             # `finalized=True` is what makes the base class report TTFB against
             # this frame rather than waiting out its timeout, so the number in
             # the call log is the real speech-end-to-text figure.
@@ -241,6 +277,17 @@ class SarvamRealtimeSTTService(STTService):
                 self._language_enum(), result=msg)
             frame.finalized = True
             await self.push_frame(frame)
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        """Forget the utterance at every turn boundary.
+
+        Without this the duplicate guard would leak across turns and swallow a
+        caller who genuinely repeats himself -- "సరే" answered twice to two
+        different questions is two answers, not a re-score.
+        """
+        await super().process_frame(frame, direction)
+        if isinstance(frame, (UserStartedSpeakingFrame, UserStoppedSpeakingFrame)):
+            self._last_final = ""
 
     def _language_enum(self) -> Language | None:
         try:
