@@ -353,15 +353,24 @@ class ReplyFilter(FrameProcessor):
             # One sanitizer per response; it carries per-reply truncation state.
             if self._spoken.strip():
                 self._said.append(self._spoken)
-                # Feed it back into the state block, which is where repetition
-                # is actually prevented now.
-                if self._injector is not None:
-                    said = self._spoken.strip()[:90]
-                    if said not in self._injector.state.asked:
-                        self._injector.state.asked.append(said)
-                    # The question was really put to the caller. Only now does
-                    # it count against that field's two-ask budget.
-                    self._injector.state.commit_ask()
+                # The ask is NOT charged here. It is charged once, when the
+                # reply ENDS -- see the LLMFullResponseEndFrame branch.
+                #
+                # Charging in both places cost a real call. Run 783:
+                #
+                #   BOT : సరే, మీరు ఏ ఏరియా లేదా సిటీలో    <- barge-in, cut off
+                #   BOT : సరే, మీకు సొంత రూఫ్ లేదా టెర్రస్ ఉందా?
+                #
+                # The caller was never asked where he lives again and the saved
+                # lead has `location: null`. The end frame charged it, the
+                # barge-in re-rendered the state block and put the same field
+                # back into `pending_ask`, and this branch charged it a second
+                # time. Two charges is the entire two-ask budget, so the field
+                # left `still_need` after one interrupted question.
+                #
+                # A reply cut off before it ends is now not charged at all,
+                # which is the right answer on its own terms: the caller never
+                # heard the whole question.
             # Rebuilt per reply on purpose: the caller's name is
             # usually learned halfway through the call, so it is
             # read fresh rather than captured at construction.

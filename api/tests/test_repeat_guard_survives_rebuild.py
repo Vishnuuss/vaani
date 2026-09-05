@@ -82,3 +82,34 @@ def test_the_in_memory_history_still_works():
     rf = ReplyFilter()
     rf._said.append("ఏ loan అండి?")
     assert rf._is_repeat("ఏ loan అండి?")
+
+
+def test_the_ask_is_charged_in_exactly_one_place():
+    """Run 783: a question interrupted once burned its whole two-ask budget.
+
+        BOT : సరే, మీరు ఏ ఏరియా లేదా సిటీలో    <- barge-in, cut mid-question
+        BOT : సరే, మీకు సొంత రూఫ్ లేదా టెర్రస్ ఉందా?
+
+    The caller was never asked where he lives again and the saved lead record
+    has `location: null`. The end frame charged the ask, the barge-in re-rendered
+    the state block and put the same field back into `pending_ask`, and the next
+    reply's START frame charged it again. Two charges is the whole budget.
+
+    `commit_ask` is idempotent by itself -- it clears `pending_ask` -- so this
+    only bites when a render lands between the two commits, which is exactly
+    what an interruption causes. The fix is to charge in one place, and the
+    right place is the end of the reply.
+    """
+    import inspect
+
+    from api.services.vaani import brain_processor
+
+    src = inspect.getsource(brain_processor.ReplyFilter.process_frame)
+    assert src.count("state.commit_ask()") == 1, (
+        "the ask must be charged in exactly one place in process_frame")
+
+    start, end = src.index("LLMFullResponseStartFrame"), src.index(
+        "LLMFullResponseEndFrame")
+    assert start < src.index("state.commit_ask()"), "unexpected ordering"
+    assert end < src.index("state.commit_ask()"), (
+        "commit_ask must sit in the END branch, not the START branch")
