@@ -43,6 +43,7 @@ from api.schemas.workflow_configurations import (
     DEFAULT_ENDPOINT_MAX_SECS,
     DEFAULT_ENDPOINT_MIN_SECS,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
+    DEFAULT_SEMANTIC_TURN_COMPLETION,
     DEFAULT_SMART_TURN_STOP_SECS,
     DEFAULT_TURN_START_MIN_WORDS,
     DEFAULT_TURN_START_STRATEGY,
@@ -50,6 +51,13 @@ from api.schemas.workflow_configurations import (
     DEFAULT_TURN_WAIT_FOR_TRANSCRIPT,
 )
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+from pipecat.turns.user_stop.deferred_user_turn_stop_strategy import deferred
+from pipecat.turns.user_stop.llm_turn_completion_user_turn_stop_strategy import (
+    LLMTurnCompletionUserTurnStopStrategy,
+)
+from pipecat.turns.user_turn_completion_mixin import UserTurnCompletionConfig
+from api.services.vaani.compiler import MODE_PROTOCOL
+from api.services.vaani.turn_completion import compose_instructions
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.turns.user_start import (
     ExternalUserTurnStartStrategy,
@@ -194,8 +202,7 @@ def create_user_turn_stop_strategies(
             )
             analyzer = LocalSmartTurnAnalyzerV3(
                 params=SmartTurnParams(stop_secs=stop_secs))
-        return [
-            TextAwareTurnStopStrategy(
+        detector = TextAwareTurnStopStrategy(
                 turn_analyzer=analyzer,
                 # Let the semantic turn detector end the turn on its own verdict
                 # instead of waiting for the final transcript (measured 438 ms
@@ -206,7 +213,50 @@ def create_user_turn_stop_strategies(
                 wait_for_transcript=run_configs.get(
                     "turn_wait_for_transcript", DEFAULT_TURN_WAIT_FOR_TRANSCRIPT
                 ),
-            )
+        )
+
+        if not run_configs.get("semantic_turn_completion",
+                               DEFAULT_SEMANTIC_TURN_COMPLETION):
+            return [detector]
+
+        # SEMANTIC turn completion: the LLM decides, the timer does not.
+        #
+        # Run 790, the call the client complained about:
+        #
+        #     USER : ...ఇండస్ట్రియల్ ఏరియాలో ఉంటాను.
+        #     USER : సిటీకి కొంచెం బయట.          <- still talking
+        #     BOT  : సరే, మీకు సొంత              <- cut in
+        #
+        # "ఇండస్ట్రియల్ ఏరియాలో ఉంటాను" is a grammatically COMPLETE sentence.
+        # The prosody model hears a falling contour, and `completeness` finds no
+        # dangling quantity, no open range, no connective and no hesitation. Both
+        # signals say finished and both are wrong. Grammatically complete is not
+        # conversationally complete, and neither a timer nor a grammar rule can
+        # separate them -- only something that follows the conversation can.
+        #
+        # So the analyzer is DEFERRED: it still decides when to ASK the question,
+        # which keeps the only detector that reads Telugu prosody in the loop and
+        # keeps `analyzer_from` able to hand the same instance to the filler
+        # player. The LLM ANSWERS it, with the marker protocol -- and on ○ or ◐
+        # the turn is not finalized, so the caller keeps the floor.
+        #
+        # This needs no interim transcripts. An earlier note in this project
+        # said it was blocked on realtime STT; that is true only of the LATENCY
+        # benefit -- thinking ahead mid-utterance -- and not of this, which is
+        # the correctness benefit.
+        #
+        # Vaani's own instructions, not pipecat's: pipecat's demand that every
+        # reply BEGIN with the marker, and MODE_PROTOCOL demands it begin with
+        # MODE. `compose_instructions` orders them -- marker, MODE, speech --
+        # so both survive. MODE: END is the only thing that hangs up a call.
+        logger.info("Semantic turn completion ENABLED (LLM gates the turn end)")
+        return [
+            deferred(detector),
+            LLMTurnCompletionUserTurnStopStrategy(
+                config=UserTurnCompletionConfig(
+                    instructions=compose_instructions(MODE_PROTOCOL),
+                ),
+            ),
         ]
 
     return [SpeechTimeoutUserTurnStopStrategy()]

@@ -148,6 +148,26 @@ DEFAULT_CONTEXT_COMPACTION_ENABLED = False
 #
 # Default True so every agent built from here gets it without anyone
 # remembering to set it.
+# Let the LLM decide whether the caller has finished, instead of a timer.
+#
+# The client, 5 Sep, after a live call: "you need to understand intent by
+# semantic naa whether sentence is complete or not". Run 790 is why:
+#
+#     USER : ...ఇండస్ట్రియల్ ఏరియాలో ఉంటాను.
+#     USER : సిటీకి కొంచెం బయట.          <- still talking
+#     BOT  : సరే, మీకు సొంత              <- cut in
+#
+# "ఇండస్ట్రియల్ ఏరియాలో ఉంటాను" is a grammatically complete sentence. The
+# prosody model hears a falling contour; `completeness.sounds_unfinished` finds
+# no dangling quantity, no open range, no connective, no hesitation. Both
+# signals say finished and both are wrong, because grammatically complete is
+# not conversationally complete -- and no timer and no grammar rule can tell
+# those apart.
+#
+# OFF by default: it changes the reply FORMAT (a marker precedes the MODE
+# line), so it is switched on per workflow and listened to before it spreads.
+DEFAULT_SEMANTIC_TURN_COMPLETION = False
+
 DEFAULT_TTS_TOKEN_STREAMING = True
 
 DEFAULT_LLM_HEDGE = 3
@@ -316,6 +336,7 @@ class WorkflowConfigurationDefaults(BaseModel):
     speculation_enabled: bool = DEFAULT_SPECULATION_ENABLED
     llm_hedge: int = Field(default=DEFAULT_LLM_HEDGE, ge=1, le=3)
     tts_token_streaming: bool = DEFAULT_TTS_TOKEN_STREAMING
+    semantic_turn_completion: bool = DEFAULT_SEMANTIC_TURN_COMPLETION
     stt_finalisation_budget_secs: float = Field(
         default=DEFAULT_STT_FINALISATION_BUDGET_SECS, ge=0.2, le=3.0)
     dictionary: str = ""
