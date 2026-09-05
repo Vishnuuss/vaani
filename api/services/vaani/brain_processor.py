@@ -61,7 +61,13 @@ _REPEAT_SIMILARITY = 0.80
 _LEADING_ACK = re.compile(
     r"^\W*(సరే(నండి|నం)?|మంచిది|మంచి\s*ఆలోచన|అర్థమైంది|అర్ధమైంది|"
     r"చాలా\s*సంతోషమండి|అలాగే(నండి)?|కరెక్టే?|ఓకే|తప్పకుండా)"
-    r"[\s,.ఁ-౿]{0,12}?(సార్|అండి|మేడమ్)?\W*",
+    # Greedy over PUNCTUATION AND SPACE only, so the trailing honorific is
+    # actually reached. The old class spanned the whole Telugu block and had to
+    # be lazy to stay safe, which meant it stopped before "అండి" and left it
+    # attached to the substance: "సరే అండి, ఏ loan అండి?" stripped to
+    # "అండి, ఏ loan అండి?" while a bare "ఏ loan అండి?" stripped to itself, so
+    # the two never compared equal and run 721 repeated the question four times.
+    r"[\s,.]{0,4}(సార్|అండి|మేడమ్)?\W*",
     re.IGNORECASE)
 
 
@@ -301,15 +307,37 @@ class ReplyFilter(FrameProcessor):
         to repeat and would otherwise make every turn look like the last one.
         """
         head = _normalise(_strip_ack(text))
-        if len(head) < _REPEAT_PREFIX:
-            # Either too little to judge, or the whole reply was an
-            # acknowledgement -- which is meant to recur.
+        if not head:
+            # The whole reply was an acknowledgement, which is meant to recur.
             return False
-        for prev in self._said:
-            other = _normalise(_strip_ack(prev))[: len(head)]
+
+        # Everything this call has already said, including earlier TURNS.
+        #
+        # `self._said` lives on this object, and on a phone call that object
+        # lives for the whole call. Text chat rebuilds the pipeline for every
+        # message (`text_chat_runner`), so `_said` was always empty there and
+        # the guard was blind -- run 721 asked one question four times with the
+        # ask budget already correctly capped at two. `state.asked` is
+        # persisted across turns, so it is the half that survives a rebuild.
+        previous = list(self._said)
+        state = getattr(self._injector, "state", None)
+        if state is not None:
+            previous.extend(getattr(state, "asked", []) or [])
+
+        for prev in previous:
+            other = _normalise(_strip_ack(prev))
             if not other:
                 continue
-            if SequenceMatcher(None, head, other).ratio() >= _REPEAT_SIMILARITY:
+            # An EXACT repeat is unambiguous at any length. The length floor
+            # below exists so two different SHORT questions are not called the
+            # same by a fuzzy ratio; it was never a reason to allow a sentence
+            # to be said twice word for word. wf3's "ఏ loan అండి?" is twelve
+            # characters and was repeating under that floor.
+            if other == head:
+                return True
+            if len(head) < _REPEAT_PREFIX:
+                continue
+            if SequenceMatcher(None, head, other[: len(head)]).ratio() >= _REPEAT_SIMILARITY:
                 return True
         return False
 
