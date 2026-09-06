@@ -445,6 +445,27 @@ class ReplyFilter(FrameProcessor):
                 said = self._spoken.strip()[:90]
                 if said not in self._injector.state.asked:
                     self._injector.state.asked.append(said)
-                self._injector.state.commit_ask()
+
+                # An apology is not a question, and must not be billed as one.
+                #
+                # Run 783's trap, traced end to end: a barge-in cancels the
+                # generation, so the half-spoken question never reaches this
+                # branch and is correctly not charged -- but the fragment does
+                # land in `_said`. The model re-asks, `_is_repeat` matches the
+                # new full question against that fragment, and `_gate`
+                # substitutes REPAIR_LINE. The repair line then completes
+                # normally, reaches here, and charges the field for a question
+                # the caller never heard. Two of those and the field is
+                # abandoned: the agent spends the caller's question budget
+                # apologising for its own interruption.
+                is_repair = said == guardrails.REPAIR_LINE.strip()[:90]
+                if not is_repair:
+                    self._injector.state.commit_ask()
+
+                # Run 803: the goodbye is an event, not a standing order. Until
+                # something recorded that it had been delivered, `render()`
+                # re-issued the identical closing instruction on every turn --
+                # seven times, to a caller asking to be let go.
+                self._injector.state.note_reply_delivered()
 
         await self.push_frame(frame, direction)
