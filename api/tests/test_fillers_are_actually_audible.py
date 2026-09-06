@@ -1,4 +1,16 @@
-"""The filler player must have audio for the voice that is actually on the call.
+"""If the filler player is ever switched on, it must have audio for the LIVE voice.
+
+READ THIS FIRST: fillers are OFF (`DEFAULT_FILLERS_ENABLED = False`) and this
+file is not an argument for turning them on. They were shipped to the client
+twice and he heard them both times -- run 267, "that aaa in the middle ... it is
+like scripted", and run 273, "ఆ ఏంది మంచిది ఏంది అది?" (what is this "మంచిది"?).
+A pre-recorded word does not sound like the sentence it precedes, and this
+project's standing requirement is that replies be fully dynamic.
+
+What this file pins is narrower and still worth having: that the cache can no
+longer serve the WRONG voice, and that a switched-on player is never silently
+mute. Both were true and neither was detectable.
+
 
 Every piece of this feature was built, wired into the pipeline, gated on the
 turn detector, and covered by tests -- and it had never once made a sound.
