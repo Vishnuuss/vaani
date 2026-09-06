@@ -71,7 +71,7 @@ def test_an_answer_is_not_mistaken_for_a_question(text):
 def test_the_checklist_is_withdrawn_while_answering(text):
     """The CHECKLIST stays withdrawn. That is what run 218 was about.
 
-    The bare command "ASK THIS, IN THESE EXACT WORDS", sitting underneath a
+    The bare nomination command, sitting underneath a
     LIST OF FIELDS, is what made the agent ask his name instead of answering.
     The list is still gone. What comes back below is one ordered instruction
     with the answer first -- a different thing, and the client asked for it by
@@ -79,7 +79,7 @@ def test_the_checklist_is_withdrawn_while_answering(text):
     """
     block = state(text).render()
     assert "STILL_NEED: []" in block
-    assert "ASK THIS, IN THESE EXACT WORDS" not in block
+    assert "ASK ABOUT THIS" not in block
 
 
 @pytest.mark.parametrize("text", ASKED)
@@ -120,13 +120,13 @@ def test_the_checklist_returns_on_the_very_next_turn():
     st.render()
     st.last_user_text = "మాది కంపెనీ."
     block = st.render()
-    assert "ASK THIS, IN THESE EXACT WORDS" in block
+    assert "ASK ABOUT THIS" in block
     assert "monthly_bill" in block
 
 
 def test_an_ordinary_answer_still_gets_the_next_question():
     block = state("మాది కంపెనీ.").render()
-    assert "ASK THIS, IN THESE EXACT WORDS" in block
+    assert "ASK ABOUT THIS" in block
 
 
 def test_a_curious_caller_does_not_get_the_same_question_forever():

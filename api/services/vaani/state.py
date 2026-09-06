@@ -463,7 +463,22 @@ class CallState:
         if self.appointment_iso:
             return True
         if not self.still_need:
-            return True
+            # An empty checklist is NOT the same as a finished call.
+            #
+            # Run 817. Every field hit its two-ask cap while the caller was
+            # still on the line and actively engaged -- his last words were
+            # "నేను మాట్లాడేది కొంచెం వింటారా?" (will you listen to what I am
+            # saying?). `still_need` was empty because we had GIVEN UP on all
+            # six, not because he had answered them. This branch read that as a
+            # completed call, the closing counter fired, and the agent invented
+            # "రేపు ఉదయం ten o'clock", said goodbye and hung up on him. The
+            # saved lead has an appointment_time and assessment_agreed: false.
+            #
+            # Abandonment is failure. Failure must not hang up on the caller --
+            # it must keep talking to him, which is what the NOTHING LEFT TO ASK
+            # branch already does well. Only a checklist emptied by ANSWERS is a
+            # call that has run its course.
+            return not self.abandoned
         return False
 
     def note_reply_delivered(self) -> None:
@@ -798,10 +813,13 @@ class CallState:
             if nxt and not _is_booking_field(nxt) and self.questions.get(nxt):
                 follow = (
                     " THEN, in the SAME reply and only after you have actually "
-                    f'answered, add this one question: "{self.questions[nxt]}" '
-                    "-- do not reword it, do not drop the options, and never "
-                    "ask it before the answer. If your answer needed more than "
-                    "two sentences, leave the question out entirely.")
+                    "answered, ask about this ONE thing, in your own words, "
+                    "phrased to follow naturally from what they just said: "
+                    f'"{self.questions[nxt]}". Keep every option it names -- '
+                    "the options are what let them answer in one word -- but "
+                    "the wording is yours. Never ask before answering. If your "
+                    "answer needed more than two sentences, leave the question "
+                    "out entirely.")
                 self.pending_ask = nxt
             else:
                 self.pending_ask = ""
@@ -853,9 +871,25 @@ class CallState:
                 #
                 # The client writes these questions; they name the options on
                 # purpose, because a caller told the options answers in one word.
+                #
+                # CHANGED 7 Sep. "IN THESE EXACT WORDS ... do not reword it" was
+                # the answer to run 336, and it worked -- the options stopped
+                # going missing. It also made the agent recite. Run 817 asked
+                # the property question in byte-identical form three times while
+                # the caller was asking to be heard, and he said it plainly:
+                # "my answers are not reaching the LLM, it is 100% scripted".
+                # He is right, and this line is why: his words reach the model
+                # and then an instruction after them dictates the exact output
+                # sentence, so nothing he says can change it.
+                #
+                # The OPTIONS are the part that must survive, not the wording.
+                # So the requirement moves to the options and the phrasing goes
+                # back to the model, which is the whole reason there is one.
                 lines.append(
-                    f'ASK THIS, IN THESE EXACT WORDS: "{self.questions[nxt]}" '
-                    "-- do not reword it and do not drop the options.")
+                    f'ASK ABOUT THIS: "{self.questions[nxt]}" -- keep every '
+                    "option it names, because the options are what let them "
+                    "answer in one word, but put it in your OWN words and make "
+                    "it follow from what they just said.")
                 self.pending_ask = nxt
                 # The client's complaint, in one word: "no confirmations". The
                 # reference agent opens nearly every turn with a two-word
