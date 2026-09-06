@@ -250,7 +250,7 @@ class TeluguTurnParams(BaseTurnParams):
     # The two-sided endpointing window. `stop_secs` is used only when the model
     # is unavailable; when it IS available the wait is interpolated between
     # these, driven by how finished the caller sounds. See `_wait_secs`.
-    min_endpoint_secs: float = 0.05
+    min_endpoint_secs: float = 0.70
     max_endpoint_secs: float = 1.40
     fragment_floor_secs: float = 1.00
     # A floor for turns the model is NOT nearly certain about, whatever their
@@ -270,7 +270,7 @@ class TeluguTurnParams(BaseTurnParams):
     # Default 0 keeps today's behaviour exactly. Anything above it trades wait
     # for cut-offs on the blind turns only, and leaves every turn that does have
     # its transcript as fast as it is now.
-    blind_min_silence_ms: float = 0.0
+    blind_min_silence_ms: float = 250.0
     # How close to the trained threshold still counts as "nearly certain".
     # 0.95 measured best on the 1,393 labelled clips: p50 wait on turn_end
     # clips is UNCHANGED at 0.057s, mean rises 0.115 -> 0.139s, and mid-turn

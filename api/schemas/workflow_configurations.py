@@ -54,7 +54,29 @@ DEFAULT_SMART_TURN_STOP_SECS = 0.2
 # caller who has genuinely stopped must not sit in silence. 1.4 s here is
 # 1.6 s of total silence with VAD, which is roughly the longest hesitation
 # measured in the harvested caller recordings.
-DEFAULT_ENDPOINT_MIN_SECS = 0.05     # + VAD 0.2 = 0.25 s when it clearly ended
+# The wait when the model has scored the turn but NOT above its bar -- i.e. it
+# has an opinion and the opinion is "probably not finished".
+#
+# Raised from 0.05 on 7 Sep. Measured over 589 recorded speech bursts:
+#
+#     0.05 (was)   32.6% cut off   wait p50 0.30s   p90 0.50s
+#     0.70         27.7%           wait p50 0.30s   p90 1.00s
+#     0.70         27.7%           wait p50 0.30s   p90 1.00s
+#     0.90         26.5%           wait p50 0.30s   p90 1.18s
+#
+# With the 250ms blind floor beside it, 0.70 measures 24.4% and 0.90 measures
+# 22.9%. 0.70 is chosen for 1.5 points more cut-offs because it holds the
+# analyzer's p90 at exactly 1.00s, which is the client's stated ceiling for a
+# whole reply. Buying the last points by exceeding the ceiling he set is not
+# mine to do.
+#
+# The MEDIAN DOES NOT MOVE. A turn the model is confident about ends on the
+# immediate path and never reaches this value, so the typical turn is exactly as
+# fast as before; the extra patience lands only on turns the model already
+# doubts, which is where the caller is still talking. That is the whole point --
+# every earlier attempt at this bought cut-offs with latency on EVERY turn.
+#
+DEFAULT_ENDPOINT_MIN_SECS = 0.70
 DEFAULT_ENDPOINT_MAX_SECS = 1.40     # + VAD 0.2 = 1.60 s when clearly mid-thought
 # A short utterance is where the prosody model is least reliable and where being
 # wrong is most obvious ("మాది." is both a complete answer and the first word of

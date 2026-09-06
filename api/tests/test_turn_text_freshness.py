@@ -61,5 +61,18 @@ def test_a_transcript_from_the_PREVIOUS_turn_is_not_fresh():
     )
 
 
-def test_the_blind_floor_is_off_by_default():
-    assert TeluguTurnParams().blind_min_silence_ms == 0.0
+def test_the_blind_floor_is_on_and_bounded():
+    """Turned on 7 Sep at 250ms, after the client's run 814.
+
+    That call split his speech into two five times in fourteen turns. Measured
+    over 589 recorded bursts, 250ms of blind floor together with the raised
+    `min_endpoint_secs` takes the cut-off rate from 32.6% to 22.9% for 0.14s of
+    median wait -- inside the client's stated ceiling of about one second of
+    total reply time.
+
+    Bounded here because the trade is roughly one for one beyond this point and
+    the budget is the client's to spend, not mine: 600ms reaches 24.1% on its
+    own but costs 0.48s, which breaks the ceiling.
+    """
+    ms = TeluguTurnParams().blind_min_silence_ms
+    assert 0 < ms <= 400, ms
