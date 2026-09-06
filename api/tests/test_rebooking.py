@@ -84,7 +84,26 @@ def test_the_reply_is_told_to_confirm_the_new_time():
 def test_a_question_after_booking_is_answered_not_repeated():
     s = booked_state()
     s.last_user_text = "సబ్సిడీ ఎంత వస్తుంది?"
-    assert "answer THAT first" in s.render()
+    block = s.render()
+    assert "respond to" in block and "THAT first" in block
+    # The words themselves now reach the instruction. Naming the topic was not
+    # enough for run 803, whose caller was answered with a recital of the
+    # booking he had just amended.
+    assert "సబ్సిడీ ఎంత వస్తుంది?" in block
+
+
+def test_a_STATEMENT_after_booking_is_also_answered_not_repeated():
+    """Run 803. The gate here used to be `_is_question`, and this is what it let through.
+
+    "బుధవారం చాలు" -- Wednesday is enough, drop the Friday. New information,
+    a plain statement, no question word. The gate missed it and the agent read
+    the two-slot confirmation back at him, then did it four more times.
+    """
+    s = booked_state()
+    s.last_user_text = "బుధవారం చాలు"
+    block = s.render()
+    assert "బుధవారం చాలు" in block
+    assert "THAT first" in block
 
 
 def test_a_question_with_no_time_in_it_leaves_the_booking_alone():

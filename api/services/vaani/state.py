@@ -444,6 +444,40 @@ class CallState:
             self.last_asked = self.pending_ask
             self.pending_ask = ""
 
+    def closing_is_due(self) -> bool:
+        """Would `render()` reach a branch that tells the model to END THE CALL?
+
+        Mirrors the terminal branches of the chain in `render()`, in the same
+        order. The branches that merely OFFER a time are deliberately excluded:
+        they say "here are two slots", which is a question, not a goodbye, and
+        counting them would hang up on a caller who is still choosing.
+        """
+        if self.disqualified:
+            return True
+        if self.next_step_agreed and not self.appointment_iso:
+            return False        # offering times -- not a close
+        if self.next_step_agreed:
+            return True
+        if self.buying_signal and not self.appointment_iso:
+            return False        # offering times -- not a close
+        if self.appointment_iso:
+            return True
+        if not self.still_need:
+            return True
+        return False
+
+    def note_reply_delivered(self) -> None:
+        """Record that the reply just built was actually spoken.
+
+        Only closings are counted. Run 803 needed exactly one fact that nothing
+        recorded: whether the goodbye had already been said. Without it the
+        BOOKED branch is a standing order rather than an event, and the model
+        carries it out on every turn for as long as the caller stays on the
+        line -- which he did, for a minute, asking to be let go.
+        """
+        if self.must_end or self.closing_is_due():
+            self.closings_said += 1
+
     @property
     def elapsed_s(self) -> int:
         return int(time.time() - self.started_at)
@@ -470,6 +504,7 @@ class CallState:
         "disqualified", "disqualify_reason", "misheard_last_turn",
         "next_step_agreed", "buying_signal", "refusals", "no_more_questions",
         "must_end", "end_reason", "appointment_iso", "taken_slots", "reacted",
+        "refunds", "closings_said",
     )
 
     def snapshot(self) -> dict:
@@ -507,6 +542,24 @@ class CallState:
     # refund has to know. Cleared when refunded, so one interruption cannot
     # give back two asks.
     last_asked: str = ""
+    # How many times each field has been GIVEN BACK after the caller was cut
+    # off or said he had not answered. Bounded in triage, because a refund the
+    # caller can trigger at will is not a budget.
+    refunds: dict = field(default_factory=dict)
+    # How many closing sentences have actually been delivered.
+    #
+    # Run 803 said the same booking confirmation SEVEN times. Every field was
+    # filled, so `render()` reached the BOOKED branch and emitted "say those
+    # exact words back and END THE CALL" -- and then emitted the identical
+    # instruction on the next turn, and the next, because nothing recorded that
+    # it had already been carried out. The model was not looping; it was obeying
+    # the same order six more times.
+    #
+    # The caller's own question, on 6 Sep: "how can the LLM give the same
+    # response again and again if my answer is different?" It can, and this is
+    # how: his words are in the context, but a system instruction appended AFTER
+    # them outranks him, and that instruction never changed.
+    closings_said: int = 0
     # The appointment, once the caller has named one. ISO, because a vendor
     # diary needs a timestamp and not a sentence.
     appointment_iso: str = ""
@@ -604,6 +657,18 @@ class CallState:
         # that simply listing STILL_NEED at the end of the context makes the model
         # ask for those fields -- even right after it agreed to remove the caller
         # from the list. That produced 8 of 12 compliance violations.
+        # Run 803: seven identical closings. A goodbye already delivered once
+        # must not be re-issued as though it were new -- it is an event that has
+        # happened, not a standing instruction. The second time round the call
+        # simply ends, which is what `must_end` and `EndCallBridge` are for and
+        # what nothing was reaching.
+        if self.closings_said >= 1 and self.closing_is_due():
+            self.must_end = True
+            self.end_reason = (
+                "You have already said goodbye once and the caller is still on "
+                "the line. Say one short farewell and END THE CALL now. Do NOT "
+                "repeat the appointment and do NOT ask anything.")
+
         if self.must_end:
             lines.append(f"STILL_NEED: [] -- STOP. {self.end_reason} "
                          "Say one short closing sentence and END THE CALL. "
@@ -633,14 +698,28 @@ class CallState:
                     f'STILL_NEED: [] -- THEY MOVED IT. The visit is now "{said}", '
                     "not the earlier time. Say those exact words back to them, "
                     "the day included, thank them, and END THE CALL.")
-            elif _is_question(self.last_user_text):
+            elif self.last_user_text.strip():
                 # Booked is not deaf. Run 300 repeated one closing sentence at a
                 # man asking about another day, four times, until he gave up.
+                #
+                # This was gated on `_is_question` -- a question-word regex --
+                # so it only listened when the caller happened to phrase himself
+                # as a question. Run 803 said "బుధవారం చాలు" (Wednesday is
+                # enough -- drop the Friday). New information, a plain statement,
+                # no question word, so the gate missed it and he was read the
+                # two-slot confirmation again. He then said it four more ways
+                # and was read the same sentence four more times.
+                #
+                # The gate is gone. Whatever the caller last said is quoted here
+                # verbatim and answered first, question or not. It costs a few
+                # tokens in the uncached tail; it is the difference between an
+                # agent that is listening and one that is reciting.
                 lines.append(
-                    f'STILL_NEED: [] -- BOOKED for "{when.say()}". THEY JUST ASKED '
-                    "YOU SOMETHING: answer THAT first, in one short sentence. "
-                    "Then say that time back in those exact words, the day "
-                    "included, and END THE CALL.")
+                    f'STILL_NEED: [] -- BOOKED for "{when.say()}". THEY JUST '
+                    f'SAID: "{self.last_user_text.strip()[:120]}" -- respond to '
+                    "THAT first, in one short sentence, and act on it if it "
+                    "changes the appointment. Then say the time back in those "
+                    "exact words, the day included, and END THE CALL.")
             else:
                 # The DAY is the half that goes missing. Run 323 booked
                 # "ఎల్లుండి సాయంత్రం five o'clock" and said back "సాయంత్రం ఐదు

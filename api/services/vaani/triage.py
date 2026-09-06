@@ -72,6 +72,58 @@ ALREADY_ANSWERED = re.compile(
     re.IGNORECASE)
 
 
+# --- "I have NOT told you yet" ----------------------------------------------
+# The exact opposite of ALREADY_ANSWERED, and it had no pattern at all -- which
+# is how run 804 lost three of its six fields.
+#
+# The agent asked for the bill, cut the caller off mid-answer ("వచ్చేసి"), and
+# moved on. He then said, three times, in plain Telugu, that he had not answered:
+#
+#     "ఏం బిల్ చెప్పలా ఏదో"                     I didn't say the bill
+#     "నేను చెప్పలే కదా ఎందుకు ముందుకు పోతున్నావ్"  I didn't say it -- why move on?
+#     "బిల్లు తెలుసుకోలేదు కదా, మరి నెక్స్ట్ క్వశ్చన్ ఏమి పోయినారు?"
+#
+# None of the three was recognised. `monthly_bill` hit its two-ask cap and left
+# the checklist for good, so the one thing he was asking to be asked was the one
+# thing the agent could no longer ask. Saved as null.
+#
+# A caller saying "I have not answered" is the same class of signal as
+# ALREADY_ANSWERED -- the caller telling us the checklist is wrong -- and it is
+# believed the same way, instantly, rather than waiting for the extractor.
+#
+# The two patterns are opposites and cannot both fire: "చెప్పాను" (I said) has
+# no negative suffix, and every alternative here requires one.
+NOT_YET_ANSWERED = re.compile(
+    r"(చెప్ప(లేదు|లేద|లేను|లే|లా)|తెలుసుకో(లేదు|లేద)|అడగ(లేదు|లేద)"
+    r"|ఆన్సర్\s*(చేయ|ఇవ్వ)(లేదు|లేద|లేక)|ఇంకా\s*చెప్ప|చెప్పనే\s*లేదు"
+    r"|(ముందుకు|నెక్స్ట్).{0,18}(పోతున్|పోయిన|వెళ్ళ|వెళ్త)"
+    r"|नहीं\s*बताया|अभी\s*तक\s*नहीं"
+    r"|did\s*n[o']?t\s+(tell|say|answer)|haven[o']?t\s+(told|said|answered)"
+    r"|you\s+skipped|why.{0,30}next\s+question)",
+    re.IGNORECASE)
+
+
+# --- the caller is saying goodbye -------------------------------------------
+# Run 803 ended with the agent repeating one booking confirmation SEVEN times.
+# The caller said goodbye four times and finally asked "బాయ్ బాయ్ కట్ చేస్తారా
+# మీరు" -- will you hang up? -- because the agent would not.
+#
+# `must_end` was reachable only from a removal, a fraud accusation, a second
+# refusal, or the model emitting `MODE: END` of its own accord. It never did.
+# So a caller who has finished the call has no way to end it, and the state
+# block hands the model the same closing instruction every turn forever.
+#
+# Deliberately NOT matching "ఉంటాను". It is the polite Telugu sign-off AND the
+# ordinary verb for "I live" -- "హైదరాబాద్‌లో ఉంటాను" is run 803's location
+# answer, and hanging up on it would lose the call it is trying to save.
+FAREWELL = re.compile(
+    r"((^|\s)(బాయ్|బై|టాటా)(\s|$|\.|,)|వీడ్కోలు|శెలవు"
+    r"|(కాల్|ఫోన్)\s*(కట్|పెట్టే)|కట్\s*చేస్(తారా|తా|ేయండి)"
+    r"|अलविदा|फ़ोन\s*रख"
+    r"|(^|\s)bye(\s|$|\.|,|-)|good\s*bye|hang\s*up|cut\s+the\s+call)",
+    re.IGNORECASE)
+
+
 # --- a child answered --------------------------------------------------------
 CHILD = re.compile(
     r"((అమ్మ|నాన్న|డాడీ|మమ్మీ).{0,20}(లేరు|బయటికి|ఇంట్లో\s*లేరు)"
@@ -218,6 +270,11 @@ def triage(text: str) -> Triage:
     if REMOVAL.search(t):
         return Triage(must_end=True,
                       reason="The caller asked to be removed from the list.")
+    if FAREWELL.search(t):
+        return Triage(must_end=True,
+                      reason="The caller is saying goodbye. Say one short "
+                             "farewell and END THE CALL. Do not re-state the "
+                             "appointment, do not ask anything, do not pitch.")
     if FRAUD.search(t):
         return Triage(must_end=True,
                       reason="The caller believes this is a fraud. Do not ask "
@@ -248,6 +305,17 @@ def triage(text: str) -> Triage:
     )
 
 
+# A field may be given back at most this many times.
+#
+# Refunds exist so an interrupted caller keeps his question. They must not
+# become an unbounded budget, and the ceiling is not a matter of taste: run 218
+# hung up after being asked the same thing FOUR times. One refund on top of the
+# two-ask cap makes three the most a caller can ever be asked, which stays under
+# that. Replaying run 804 with a cap of two produced four consecutive bill
+# questions -- the fix rebuilding the bug it was written to fix.
+MAX_REFUNDS_PER_FIELD = 1
+
+
 def _refund_ask(state, why: str) -> None:
     """Give back the ask that was spent on a turn the caller never completed."""
     field_name = (getattr(state, "pending_ask", "")
@@ -255,6 +323,13 @@ def _refund_ask(state, why: str) -> None:
     counts = getattr(state, "ask_counts", None)
     if not field_name or counts is None:
         return
+    refunds = getattr(state, "refunds", None)
+    if refunds is not None:
+        if refunds.get(field_name, 0) >= MAX_REFUNDS_PER_FIELD:
+            logger.info(f"triage: NOT refunding {field_name!r} again -- "
+                        f"already given back {MAX_REFUNDS_PER_FIELD} times")
+            return
+        refunds[field_name] = refunds.get(field_name, 0) + 1
     if counts.get(field_name, 0) > 0:
         counts[field_name] -= 1
         # Cleared so a caller who is cut off twice on the same question does
@@ -355,6 +430,16 @@ def apply(state, text: str) -> Triage:
     if result.wants_the_floor:
         state.wants_the_floor = True
         _refund_ask(state, "the caller asked to be heard")
+
+    # "I have not told you that yet."
+    #
+    # The strongest signal there is, and it went unread until run 804. He said
+    # it three times -- "ఏం బిల్ చెప్పలా", "నేను చెప్పలే కదా ఎందుకు ముందుకు
+    # పోతున్నావ్", "బిల్లు తెలుసుకోలేదు కదా" -- while the field he was asking
+    # for sat abandoned at its two-ask cap. Refunding puts it back in
+    # `still_need`, which is the only thing that lets the agent ask it again.
+    elif NOT_YET_ANSWERED.search(text or ""):
+        _refund_ask(state, "the caller says he has not answered it yet")
 
     # Same refund when we simply cut him off. If his final transcript stops on
     # a postposition or a topic marker, the sentence was still running when the
