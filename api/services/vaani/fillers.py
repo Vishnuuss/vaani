@@ -77,11 +77,17 @@ CACHE_DIR = Path(__file__).parent / "models" / "filler_audio"
 #
 # Kept short. This is audio the caller sits through on every gated turn, so a
 # long filler spends the very budget it was added to protect.
+#
+# "అవును" (yes) was removed. A filler is chosen BEFORE the model has read the
+# turn -- that is the entire point of it -- so it cannot know what it is
+# agreeing to. Asked "సబ్సిడీ వస్తుందా?" the agent would answer "yes" out of a
+# cache, ahead of any check, and an invented commitment on a sales call is the
+# one failure this codebase spends most of its guardrails preventing. Every
+# other entry is a continuation that promises a sentence and asserts nothing.
 FILLERS: tuple[str, ...] = (
     "సరే",              # "alright"        <- harvested
     "మంచిది",           # "good"           <- harvested
     "అర్థమైంది",         # "understood"     <- harvested
-    "అవును",            # "yes"            <- harvested
     "అలాగే",            # "very well"
     "ఒక్క నిమిషం",       # "one moment"
     "చూద్దాం",           # "let us see"
@@ -124,7 +130,22 @@ def strip_leading_ack(text: str) -> str:
 # The consequence, stated so it is not forgotten: CHANGING THE AGENT'S VOICE
 # REQUIRES RE-HARVESTING. Run tools/harvest_fillers.py against a call made with
 # the new voice, or the caller hears the old one.
+#
+# That warning was a comment, and a comment is not a mechanism. The voice was
+# rotated on 5 Sep, and on 6 Sep the cache still held three clips harvested on
+# 28 Aug under the bare key "harvested" -- reachable by ANY voice, and preferred
+# over a correct render. Half the fillers would have been the previous speaker.
+#
+# So the key now carries the voice. A voice change makes stale clips unreachable
+# by construction and falls through to whatever was rendered for the voice
+# actually on the call. Being wrong now costs a missing filler, which is the
+# failure this file is willing to have.
 HARVESTED = "harvested"
+
+
+def harvested_key(voice: str) -> str:
+    """Cache key for a clip cut from the agent's own recorded speech."""
+    return f"{HARVESTED}:{(voice or '').lower()}"
 
 
 def cache_path(text: str, voice: str, sample_rate: int) -> Path:
@@ -132,14 +153,21 @@ def cache_path(text: str, voice: str, sample_rate: int) -> Path:
 
     Keyed by voice and sample rate as well as text: a cached clip in the wrong
     voice is worse than no filler, because the caller hears two different people.
+
+    The voice is lower-cased here rather than at the call sites. It reaches this
+    function from two directions -- `run_pipeline` lower-cases it, the render
+    tool takes it from a command line -- and a case mismatch between them fails
+    as a cache miss, which is silence, which is indistinguishable from the bug
+    this whole cache exists to fix. One normalisation, in the one place that
+    computes the key.
     """
-    key = f"{text}|{voice}|{sample_rate}".encode("utf-8")
+    key = f"{text}|{(voice or '').lower()}|{sample_rate}".encode("utf-8")
     return CACHE_DIR / f"{hashlib.sha256(key).hexdigest()[:16]}.pcm"
 
 
 def load_cached(text: str, voice: str, sample_rate: int) -> bytes | None:
     """A clip for this filler: the agent's own harvested voice first."""
-    for key in (HARVESTED, voice):
+    for key in (harvested_key(voice), voice):
         try:
             data = cache_path(text, key, sample_rate).read_bytes()
         except OSError:
