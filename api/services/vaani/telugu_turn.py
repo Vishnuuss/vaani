@@ -256,6 +256,21 @@ class TeluguTurnParams(BaseTurnParams):
     # A floor for turns the model is NOT nearly certain about, whatever their
     # length. See `_wait_secs` -- this is the fix for being cut off mid-answer.
     unsure_floor_secs: float = 0.30
+    # The least silence required before the CONFIDENT path may end a turn while
+    # the analyzer has no transcript for what the caller just said.
+    #
+    # Measured 6 Sep on 100 recordings, 589 speech bursts: at the moment this
+    # decides, the text for the CURRENT burst has arrived only 31.2% of the
+    # time. 44.7% of decisions see only text from an earlier utterance and
+    # 24.1% see none at all. So `sounds_unfinished` is reading the wrong
+    # sentence on more than two thirds of turns -- and the error is not
+    # symmetric: text from a FINISHED earlier utterance reads as complete, which
+    # is precisely what leaves the early path open.
+    #
+    # Default 0 keeps today's behaviour exactly. Anything above it trades wait
+    # for cut-offs on the blind turns only, and leaves every turn that does have
+    # its transcript as fast as it is now.
+    blind_min_silence_ms: float = 0.0
     # How close to the trained threshold still counts as "nearly certain".
     # 0.95 measured best on the 1,393 labelled clips: p50 wait on turn_end
     # clips is UNCHANGED at 0.057s, mean rises 0.115 -> 0.139s, and mid-turn
@@ -284,6 +299,12 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._silence_ms = 0.0
         self._last_probability: float | None = None
         self._text = ""
+        # Which turn `self._text` describes. `_clear` wipes the text at the end
+        # of every turn, so anything sitting here mid-turn arrived from STT
+        # AFTER the previous turn closed -- it is the previous utterance, not
+        # this one. -1 makes the first decision correctly count as blind.
+        self._turn_id = 0
+        self._text_turn = -1
         self._mean = self._scale = self._coef = None
         self._intercept = 0.0
         self._forest = None
@@ -416,6 +437,17 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         z = (x - self._mean) / self._scale
         return float(1.0 / (1.0 + np.exp(-(float(z @ self._coef) + self._intercept))))
 
+    @property
+    def text_is_fresh(self) -> bool:
+        """Does `self._text` describe the utterance being judged right now?
+
+        The transcript arrives from STT some hundreds of milliseconds after the
+        caller stops, and this decision is taken about 300 ms after that -- so
+        most of the time the text in hand belongs to the PREVIOUS utterance.
+        Knowing which is the difference between evidence and noise.
+        """
+        return self._text_turn == self._turn_id
+
     def note_text(self, text: str) -> None:
         """The transcript so far, for the completeness half of the decision.
 
@@ -427,6 +459,9 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         breath rather than an answer. Neither is sufficient alone.
         """
         self._text = text or ""
+        # Whatever has just been transcribed describes the speech we are in or
+        # have just left, so it is evidence about THIS turn.
+        self._text_turn = self._turn_id
 
     def _band(self) -> float:
         """How unsure the model has to be before the floor applies.
@@ -514,6 +549,19 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         if sounds_unfinished(self._text):
             wait = max(wait, self._params.fragment_floor_secs)
 
+        # And when there is no transcript for THIS turn at all, the sentence
+        # above was answering about a different one.
+        #
+        # This floor has to live here rather than on the confident branch. When
+        # the model scores above the bar `frac` reaches 1.0 and the formula
+        # collapses to `min_endpoint_secs` -- 0.05 s -- so refusing the
+        # immediate path merely routes the same verdict through a wait the
+        # 120 ms silence counter has already passed. Blocking that branch alone
+        # was measured across 589 bursts at four settings and moved the cut-off
+        # rate by exactly nothing.
+        elif not self.text_is_fresh:
+            wait = max(wait, self._params.blind_min_silence_ms / 1000.0)
+
         return min(wait, hi)
 
     def append_audio(self, buffer: bytes, is_speech: bool) -> EndOfTurnState:
@@ -534,6 +582,9 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
                         + (", being more patient from here"
                            if self.interrupting else ""))
                 self._ended_at = None
+            if not self._speech_triggered:
+                # A new turn. Any transcript still held describes the last one.
+                self._turn_id += 1
             self._silence_ms = 0.0
             self._speech_triggered = True
             return EndOfTurnState.INCOMPLETE
@@ -551,7 +602,9 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             p = self._probability()
             if p is not None:
                 self._last_probability = p
-                if p >= self._bar():
+                blind = (not self.text_is_fresh
+                         and self._silence_ms < self._params.blind_min_silence_ms)
+                if p >= self._bar() and not blind:
                     logger.debug(
                         f"[telugu-turn] finished, p={p:.2f} after "
                         f"{self._silence_ms:.0f}ms of silence "
@@ -587,4 +640,5 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         self._buffer = []
         self._silence_ms = 0.0
         self._text = ""
+        self._text_turn = -1
         self._last_probability = None
