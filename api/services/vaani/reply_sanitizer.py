@@ -64,6 +64,10 @@ from __future__ import annotations
 
 import re
 
+# The markers semantic turn completion puts in front of a reply. Listed here so
+# the last processor before TTS can refuse to speak one, whatever upstream does.
+TURN_MARKERS = "✓○◐"          # complete, incomplete-short, incomplete-long
+
 # `MODE: ASK` / `mode:end` / `MODE : CLOSE` -- and any trailing junk on the line.
 MODE_RE = re.compile(r"MODE\s*:\s*(ASK|CLOSE|END)\b[^\n]*\n?", re.IGNORECASE)
 
@@ -101,6 +105,22 @@ class ReplySanitizer:
         self._discarded = ""
         self._truncated = False
         self._asked = False
+        # Has any real speech been released yet this reply?
+        #
+        # A reply must never BEGIN with whitespace, and run 792 shipped one that
+        # did on every single turn. Semantic turn completion puts a marker
+        # before the MODE line, the mixin strips the marker only from the chunk
+        # it arrived in, so a lone "✓" token leaves the NEXT chunk as
+        # " MODE: ASK" plus a blank line. MODE_RE then removes the MODE line
+        # and one newline and leaves a space and a newline at the front, and
+        # whitespace is truthy at every
+        # guard between here and the saved transcript, so it was spoken and
+        # stored.
+        #
+        # Fixing MODE_RE would fix that one producer. This fixes the class: the
+        # front of a reply is not a place where whitespace can mean anything, so
+        # it is dropped until something real has been said, whatever produced it.
+        self._spoke_any = False
         self.mode: str | None = None
         self.removed: list[str] = []
 
@@ -125,7 +145,28 @@ class ReplySanitizer:
         return self._drain(final=True)
 
     def _drain(self, *, final: bool) -> str:
+        """Release what is safe to speak, and record whether anything was.
+
+        A wrapper rather than a flag set at each `return` inside: the drain has
+        six exits and one of them being missed is exactly the kind of omission
+        that put a stray space and newline in front of every reply in run 792.
+        """
+        out = self._drain_inner(final=final)
+        if out.strip():
+            self._spoke_any = True
+        return out
+
+    def _drain_inner(self, *, final: bool) -> str:
         self._buffer = self._strip_modes(self._buffer)
+        if not self._spoke_any:
+            # Nothing real has been said yet, so anything here is residue of
+            # something stripped upstream, never speech. Turn-completion markers
+            # are included: pipecat's mixin is supposed to remove them, and in
+            # run 792 it did not when one arrived as a token of its own. A "✓"
+            # read aloud to a caller is not a smaller failure than a stray
+            # space, and the sanitizer is the last thing before TTS.
+            # No-arg lstrip handles whitespace; the markers go with it.
+            self._buffer = self._buffer.lstrip().lstrip(TURN_MARKERS).lstrip()
         self._buffer = self._register(self._buffer, final=final)
 
         cut = ROLE_LABEL_RE.search(self._buffer)
