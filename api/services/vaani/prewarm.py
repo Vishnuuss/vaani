@@ -124,7 +124,17 @@ async def _warm(api_key: str, model: str, system_prompt: str, base_url: str,
 # be faster. Which of them is fast ENOUGH and good enough is not a guess to be
 # made from a datasheet -- it is measured here, on the real prompt, from the
 # machine that will actually call it.
-BENCH_MODELS = ("openai/gpt-oss-20b",)
+# The LIVE model is FIRST, and that matters twice over: it is the only fair
+# baseline for anything measured beside it, and `BENCH_PROMPT_FRACTIONS` below
+# sweeps prompt size using BENCH_MODELS[0]. Until now that sweep ran on the 20b
+# while production ran the 120b, so the prompt-size numbers described a model
+# nobody was calling.
+BENCH_MODELS = (
+    "openai/gpt-oss-120b",              # live today -- the baseline
+    "openai/gpt-oss-20b",               # same family, smaller
+    "meta-llama/llama-4-scout-17b-16e-instruct",   # MoE, non-reasoning
+    "llama-3.3-70b-versatile",          # non-reasoning, proven multilingual
+)
 
 # Prompt sizes to time, as a fraction of the live prompt.
 #
@@ -148,6 +158,21 @@ BENCH_MODELS = ("openai/gpt-oss-20b",)
 # So the question is no longer "how long" but "how much does a MISS cost, and
 # does prompt size change it". Each size is sampled several times so the two
 # modes can be told apart instead of blurred.
+# ANSWERED, 7 Sep, over 216 samples from real calls (gpt-oss-20b):
+#
+#     prompt chars   hit rate   hit p50   MISS p50
+#       1,526          95%       0.024s    0.235s
+#       7,632          93%       0.016s    0.133s
+#      30,530          62%       0.031s    0.433s
+#
+# Prompt size hurts TWICE. A longer prefix misses the cache far more often, and
+# every miss costs far more when it happens. Expected compute is 0.184s at the
+# live 30,530 chars against 0.024s at a quarter of it.
+#
+# This does NOT mean "trim the prompt". The content is the product -- objection
+# handling is the payload, and it stays. It means the always-sent prefix is the
+# wrong home for content that is only needed in a particular situation, and
+# `coach.py` already delivers exactly that kind of thing just in time.
 BENCH_PROMPT_FRACTIONS = (1.0, 1.0, 1.0, 0.25, 0.25, 0.25, 0.05, 0.05, 0.05)
 
 
