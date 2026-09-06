@@ -98,6 +98,66 @@ DEFAULT_ENDPOINT_MAX_SECS = 1.40     # + VAD 0.2 = 1.60 s when clearly mid-thoug
 # because it is the ceiling a better completeness signal would be spending, and
 # leaving it at 0.45 would cap that work at 18%.
 DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS = 1.00
+
+# ---------------------------------------------------------------------------
+# The rest of the turn detector's timings.
+#
+# These existed only as `TeluguTurnParams` defaults and module constants in
+# `telugu_turn.py`, and `turn_taking.py` forwarded four of them out of fourteen
+# -- so changing any of the others meant editing Python and redeploying the
+# voice container. The client's objection on 7 Sep was exactly this, and it was
+# correct:
+#
+#     "hardcoding the turn detection to 450ms without understanding intent is
+#      not good"
+#
+# The number is not the problem; a number baked into the source is. How long to
+# wait before deciding a person has stopped talking is a per-agent, per-language
+# judgement -- a Telugu caller assembling "అరవై ... డెబ్భై అనుకుంటా" and an
+# English caller saying "yes" do not deserve the same stopwatch -- and it cannot
+# be a judgement while it needs a deploy.
+#
+# Every default below is the value that was already hardcoded, so behaviour is
+# UNCHANGED until somebody deliberately sets one. This moves the dial to
+# somewhere it can be turned; it does not turn it.
+# ---------------------------------------------------------------------------
+
+# Floor for turns the model is NOT nearly certain about, whatever their length.
+# The fix for being cut off mid-answer: a caller five seconds into an
+# explanation used to get no floor at all, because the fragment floor is gated
+# on the turn being SHORT.
+DEFAULT_ENDPOINT_UNSURE_FLOOR_SECS = 0.30
+# How close to the trained threshold still counts as "nearly certain". At 0.95
+# the median turn takes the fast path untouched, which is what makes the floor
+# above cost nothing on calls that already work.
+DEFAULT_ENDPOINT_UNSURE_BAND = 0.95
+# The least silence required before the CONFIDENT path may end a turn while the
+# analyzer holds no transcript for what the caller just said. Measured 6 Sep
+# over 589 speech bursts: the text for the CURRENT burst has arrived only 31.2%
+# of the time when this decision is taken; 24.1% of decisions see no text at all.
+DEFAULT_BLIND_MIN_SILENCE_MS = 250.0
+# The same floor for a SHORT utterance with no transcript yet -- where a filler
+# like "ఆ" lives. Sized to outlast Sarvam's ~0.35 s so the words actually arrive
+# and the text half of the decision can be used. THIS is the 450 the client
+# objected to; it is a default now, not a constant.
+DEFAULT_BLIND_SHORT_SILENCE_MS = 450.0
+# Below this a turn is treated as a fragment rather than an answer, and needs
+# near-certainty before it may end a turn.
+DEFAULT_TURN_FRAGMENT_SECS = 0.65
+# The near-certainty demanded of those fragments.
+DEFAULT_TURN_SHORT_THRESHOLD = 0.995
+# How much silence must accumulate before the model is asked at all.
+DEFAULT_TURN_MIN_SILENCE_MS = 120.0
+# How much of the utterance's tail the model reads.
+DEFAULT_TURN_WINDOW_SECS = 1.5
+# If the caller starts again within this, we did not end his turn -- we
+# interrupted it.
+DEFAULT_TURN_RESUME_WINDOW_SECS = 1.0
+# How many such interruptions before this caller is treated as one the model
+# reads badly and given the floor on every turn. Two, not one: one is a cough,
+# two is a pattern.
+DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING = 2
+
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
@@ -361,6 +421,29 @@ class WorkflowConfigurationDefaults(BaseModel):
         default=DEFAULT_ENDPOINT_MAX_SECS, ge=0.1, le=5.0)
     endpoint_fragment_floor_secs: float = Field(
         default=DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS, ge=0.0, le=3.0)
+    # The rest of the endpoint window. Bounds are deliberately generous at the
+    # top: an agent whose callers think in long pauses should be able to say so
+    # without a deploy. `le` exists to catch a typo, not to express taste.
+    endpoint_unsure_floor_secs: float = Field(
+        default=DEFAULT_ENDPOINT_UNSURE_FLOOR_SECS, ge=0.0, le=3.0)
+    endpoint_unsure_band: float = Field(
+        default=DEFAULT_ENDPOINT_UNSURE_BAND, ge=0.0, le=1.0)
+    blind_min_silence_ms: float = Field(
+        default=DEFAULT_BLIND_MIN_SILENCE_MS, ge=0.0, le=2000.0)
+    blind_short_silence_ms: float = Field(
+        default=DEFAULT_BLIND_SHORT_SILENCE_MS, ge=0.0, le=2000.0)
+    turn_fragment_secs: float = Field(
+        default=DEFAULT_TURN_FRAGMENT_SECS, ge=0.0, le=3.0)
+    turn_short_threshold: float = Field(
+        default=DEFAULT_TURN_SHORT_THRESHOLD, ge=0.0, le=1.0)
+    turn_min_silence_ms: float = Field(
+        default=DEFAULT_TURN_MIN_SILENCE_MS, ge=0.0, le=1000.0)
+    turn_window_secs: float = Field(
+        default=DEFAULT_TURN_WINDOW_SECS, ge=0.2, le=5.0)
+    turn_resume_window_secs: float = Field(
+        default=DEFAULT_TURN_RESUME_WINDOW_SECS, ge=0.0, le=5.0)
+    turn_cutoffs_before_adapting: int = Field(
+        default=DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING, ge=1, le=20)
     turn_start_strategy: Literal["default", "min_words", "provisional_vad"] = (
         DEFAULT_TURN_START_STRATEGY
     )

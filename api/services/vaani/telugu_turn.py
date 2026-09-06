@@ -28,10 +28,33 @@ features it leans on are tail energy, tail ratio and energy slope -- Telugu
 speakers trail off when they are finished, and that is exactly the signal a
 transcript throws away, which is why the text version stalled.
 
+THOSE TWO NUMBERS ARE WRONG, and everything above them is the reason
+--------------------------------------------------------------------
+Measured 7 September against real negatives for the first time, this model runs
+at **6.5% false cutoffs**, not under 2%, and ends 12.4% of turns early, not
+33.9% or 43.9%.
+
+The labelling described above is why. "A window ending where a final transcript
+arrived is a turn end" makes every training row a POSITIVE -- `turnstops.jsonl`
+is 2,754 rows and all 2,754 are `was_turn_end: True`, including "హలో" 318 times,
+"ఆ" 113 times and "ఆగండి మాట్లాడనివ్వట్లేదు" ("wait, you're not letting me
+talk") 25 times. The negatives were then manufactured by cutting prefixes off
+those positives, so they are not interruptions either.
+
+A one-class training set can only ever answer yes, and the scores confirm it:
+this model's cut-off rate tracks its early-end rate at every threshold
+(43.4%/42.7% at 0.83, 27.6%/29.4% at 0.90). It barely discriminates. That is
+also why no amount of threshold tuning ever moved the cut-off rate by more than
+a few points -- there was nothing to tune.
+
+Real labels now exist (`.tmp/harvest/turnstops_real.jsonl`, 1,707 real
+completions / 1,243 real interruptions from 648 recordings) and a model trained
+on them scores 2.05% false cutoffs at 12.6% endable early -- better on both.
+Scored by `tools/score_turn_models.py`; not yet deployed.
+
 Two models, no new dependency
 ------------------------------
-The boosted-tree version reaches 43.9% against the regression's 33.9% at the
-same safety bar, and was previously left on the shelf because scoring it needed
+The boosted-tree version was previously left on the shelf because scoring it needed
 scikit-learn in the voice container. That framed the trade as recall versus a
 dependency, which was wrong: a boosted forest IS a pile of thresholds and
 constants, and sklearn is only the thing that FOUND them. Exported to arrays by
@@ -287,6 +310,17 @@ class TeluguTurnParams(BaseTurnParams):
     # for a call that wants to be more or less cautious.
     threshold: float | None = None
     max_duration_secs: float = 8.0
+    # The five values below were module constants until 7 Sep, so tuning any of
+    # them meant a code deploy. They default to exactly what those constants
+    # held, so nothing changes until one is set deliberately -- but a Hindi or
+    # English agent can now be given its own numbers, and the detector stops
+    # imposing one language's rhythm on every caller.
+    fragment_secs: float = MIN_CONFIDENT_TURN_S
+    short_threshold: float = SHORT_TURN_THRESHOLD
+    min_silence_ms: float = MIN_SILENCE_MS
+    window_secs: float = WINDOW_S
+    resume_window_secs: float = RESUME_WINDOW_S
+    cutoffs_before_adapting: int = CUTOFFS_BEFORE_ADAPTING
 
 
 class TeluguTurnAnalyzer(BaseTurnAnalyzer):
@@ -336,7 +370,8 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         logger.info(
             f"[telugu-turn] forest enabled, {len(forest.trees)} trees, "
             f"threshold {self._params.threshold:.2f} "
-            "(43.9% of turns endable early at a 2% false-cutoff bar)"
+            "(measured 7 Sep on REAL negatives: 6.5% false cutoffs, "
+            "12.4% endable early -- NOT the 43.9%/2% this used to claim)"
         )
         return True
 
@@ -388,7 +423,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
     def interrupting(self) -> bool:
         """Have we cut this particular caller off enough times to change how we
         listen to him?"""
-        return self._cutoffs >= CUTOFFS_BEFORE_ADAPTING
+        return self._cutoffs >= self._params.cutoffs_before_adapting
 
     @property
     def _speech_secs(self) -> float:
@@ -412,15 +447,15 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         # 0.45 s, and which any resumed speech cancels.
         if sounds_unfinished(self._text):
             return 1.01                                  # unreachable by design
-        if self._speech_secs < MIN_CONFIDENT_TURN_S:
-            return max(self._params.threshold or 0.0, SHORT_TURN_THRESHOLD)
+        if self._speech_secs < self._params.fragment_secs:
+            return max(self._params.threshold or 0.0, self._params.short_threshold)
         return self._params.threshold
 
     def _probability(self) -> float | None:
         """How finished the caller sounds, from the tail of what they said."""
         if not self.enabled or not self._buffer:
             return None
-        want = int(WINDOW_S * self._rate)
+        want = int(self._params.window_secs * self._rate)
         chunks, total = [], 0
         for _, a in reversed(self._buffer):
             chunks.append(a)
@@ -519,7 +554,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             # the floor as a hedge against the model. With no model there is
             # nothing to hedge -- and no early-end path either -- so this does
             # not apply above.
-            if self._speech_secs < MIN_CONFIDENT_TURN_S:
+            if self._speech_secs < self._params.fragment_secs:
                 wait = max(wait, self._params.fragment_floor_secs)
             elif frac < self._band():
                 # The long-answer fix.
@@ -583,7 +618,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             # is reliable and a filler is unlikely, so it keeps today's speed;
             # only the short ones -- where the model is weakest and the caller
             # is most often still gathering the sentence -- pay for the text.
-            if self._speech_secs < MIN_CONFIDENT_TURN_S:
+            if self._speech_secs < self._params.fragment_secs:
                 blind = max(blind, self._params.blind_short_silence_ms / 1000.0)
             wait = max(wait, blind)
 
@@ -599,7 +634,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
                 # we just closed, we closed it too early -- and this caller
                 # gets more room for the rest of the call.
                 since = time.monotonic() - self._ended_at
-                if since < RESUME_WINDOW_S:
+                if since < self._params.resume_window_secs:
                     self._cutoffs += 1
                     logger.info(
                         f"[telugu-turn] caller resumed {since:.2f}s after we "
@@ -616,14 +651,15 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
 
         if not self._speech_triggered:
             # Trim so silence before the caller speaks cannot grow unbounded.
-            cutoff = time.monotonic() - (self._params.max_duration_secs + WINDOW_S)
+            cutoff = time.monotonic() - (self._params.max_duration_secs
+                                         + self._params.window_secs)
             while self._buffer and self._buffer[0][0] < cutoff:
                 self._buffer.pop(0)
             return EndOfTurnState.INCOMPLETE
 
         self._silence_ms += audio.size / (self._rate / 1000)
 
-        if self._silence_ms >= MIN_SILENCE_MS and self.enabled:
+        if self._silence_ms >= self._params.min_silence_ms and self.enabled:
             p = self._probability()
             if p is not None:
                 self._last_probability = p
@@ -634,7 +670,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
                 # consulted. A short blind turn now waits long enough for
                 # Sarvam (~0.35s) to say what the word actually was.
                 need = self._params.blind_min_silence_ms
-                if self._speech_secs < MIN_CONFIDENT_TURN_S:
+                if self._speech_secs < self._params.fragment_secs:
                     need = max(need, self._params.blind_short_silence_ms)
                 blind = not self.text_is_fresh and self._silence_ms < need
                 if p >= self._bar() and not blind:

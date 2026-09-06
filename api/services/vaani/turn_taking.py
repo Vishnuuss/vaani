@@ -39,7 +39,17 @@ from api.services.vaani.telugu_turn import (
     TeluguTurnParams,
 )
 from api.schemas.workflow_configurations import (
+    DEFAULT_BLIND_MIN_SILENCE_MS,
+    DEFAULT_BLIND_SHORT_SILENCE_MS,
     DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS,
+    DEFAULT_ENDPOINT_UNSURE_BAND,
+    DEFAULT_ENDPOINT_UNSURE_FLOOR_SECS,
+    DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING,
+    DEFAULT_TURN_FRAGMENT_SECS,
+    DEFAULT_TURN_MIN_SILENCE_MS,
+    DEFAULT_TURN_RESUME_WINDOW_SECS,
+    DEFAULT_TURN_SHORT_THRESHOLD,
+    DEFAULT_TURN_WINDOW_SECS,
     DEFAULT_ENDPOINT_MAX_SECS,
     DEFAULT_ENDPOINT_MIN_SECS,
     DEFAULT_PROVISIONAL_VAD_PAUSE_SECS,
@@ -194,6 +204,34 @@ def create_user_turn_stop_strategies(
             fragment_floor_secs=float(run_configs.get(
                 "endpoint_fragment_floor_secs",
                 DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS)),
+            # The other ten. Until 7 Sep this function forwarded four values out
+            # of fourteen, so the rest could only be changed by editing Python
+            # and redeploying -- including the 450 ms short-blind floor, which
+            # is the one the client objected to by name. Every default is the
+            # value that was hardcoded, so this changes no behaviour; it only
+            # makes the behaviour reachable.
+            unsure_floor_secs=float(run_configs.get(
+                "endpoint_unsure_floor_secs",
+                DEFAULT_ENDPOINT_UNSURE_FLOOR_SECS)),
+            unsure_band=float(run_configs.get(
+                "endpoint_unsure_band", DEFAULT_ENDPOINT_UNSURE_BAND)),
+            blind_min_silence_ms=float(run_configs.get(
+                "blind_min_silence_ms", DEFAULT_BLIND_MIN_SILENCE_MS)),
+            blind_short_silence_ms=float(run_configs.get(
+                "blind_short_silence_ms", DEFAULT_BLIND_SHORT_SILENCE_MS)),
+            fragment_secs=float(run_configs.get(
+                "turn_fragment_secs", DEFAULT_TURN_FRAGMENT_SECS)),
+            short_threshold=float(run_configs.get(
+                "turn_short_threshold", DEFAULT_TURN_SHORT_THRESHOLD)),
+            min_silence_ms=float(run_configs.get(
+                "turn_min_silence_ms", DEFAULT_TURN_MIN_SILENCE_MS)),
+            window_secs=float(run_configs.get(
+                "turn_window_secs", DEFAULT_TURN_WINDOW_SECS)),
+            resume_window_secs=float(run_configs.get(
+                "turn_resume_window_secs", DEFAULT_TURN_RESUME_WINDOW_SECS)),
+            cutoffs_before_adapting=int(run_configs.get(
+                "turn_cutoffs_before_adapting",
+                DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING)),
         ))
         if not analyzer.enabled:
             logger.warning(
