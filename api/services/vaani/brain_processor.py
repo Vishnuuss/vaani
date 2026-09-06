@@ -443,27 +443,8 @@ class ReplyFilter(FrameProcessor):
             # rather than a double count. `asked` is guarded the same way.
             if self._injector is not None and self._spoken.strip():
                 said = self._spoken.strip()[:90]
-                # AN APOLOGY IS NOT AN ASK.
-                #
-                # When the repeat guard fires it substitutes REPAIR_LINE --
-                # "క్షమించండి, సరిగ్గా వినిపించలేదు" -- and that reply completes
-                # normally, so it reaches this branch and used to charge the
-                # field it replaced. The caller was never asked anything.
-                #
-                # Run 790: the location question was cut off, the re-ask was
-                # scored as a repeat of its own truncated fragment, the caller
-                # heard an apology, and `location` was charged for it. Twice and
-                # the field is abandoned -- the saved lead had `location: null`.
-                # The agent was spending the caller's question budget
-                # apologising for its own interruption.
-                #
-                # Compared on the text rather than on `_blocked` so it holds
-                # whichever path produced it: the guard substituting it, or the
-                # model writing its own version.
-                is_repair = said == guardrails.REPAIR_LINE.strip()[:90]
                 if said not in self._injector.state.asked:
                     self._injector.state.asked.append(said)
-                if not is_repair:
-                    self._injector.state.commit_ask()
+                self._injector.state.commit_ask()
 
         await self.push_frame(frame, direction)
