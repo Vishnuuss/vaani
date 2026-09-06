@@ -252,7 +252,7 @@ class TeluguTurnParams(BaseTurnParams):
     # these, driven by how finished the caller sounds. See `_wait_secs`.
     min_endpoint_secs: float = 0.05
     max_endpoint_secs: float = 1.40
-    fragment_floor_secs: float = 0.45
+    fragment_floor_secs: float = 1.00
     # A floor for turns the model is NOT nearly certain about, whatever their
     # length. See `_wait_secs` -- this is the fix for being cut off mid-answer.
     unsure_floor_secs: float = 0.30

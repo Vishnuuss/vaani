@@ -60,7 +60,22 @@ DEFAULT_ENDPOINT_MAX_SECS = 1.40     # + VAD 0.2 = 1.60 s when clearly mid-thoug
 # wrong is most obvious ("మాది." is both a complete answer and the first word of
 # a sentence). Short turns therefore never end on less than this, whatever the
 # interpolation says -- the early COMPLETE path can still fire on them and does.
-DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS = 0.45
+# How long the turn is held open once the TEXT says the sentence is unfinished.
+#
+# Raised from 0.45 on 6 Sep. Priced on 589 recorded speech bursts against a
+# perfect completeness signal: at 0.45 the cut-off rate is 18.0%, at 0.70 it is
+# 10.4% and at 1.00 it is 7.5% -- and the wait does not move at all (p50 0.30s,
+# p90 0.48s, better than the 0.50s it ships with today).
+#
+# It is free because the hold applies ONLY to turns the text has flagged as
+# unfinished, and on those the caller is still speaking -- so it is not a wait,
+# it is cancelled by his own voice. Turns that really have ended never reach it.
+#
+# On today's grammar rules, which flag only 5.5% of transcripts, the measured
+# gain is small (33.3% -> 32.6%) and the measured cost is zero. It is raised now
+# because it is the ceiling a better completeness signal would be spending, and
+# leaving it at 0.45 would cap that work at 18%.
+DEFAULT_ENDPOINT_FRAGMENT_FLOOR_SECS = 1.00
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
