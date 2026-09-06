@@ -271,10 +271,6 @@ class TeluguTurnParams(BaseTurnParams):
     # for cut-offs on the blind turns only, and leaves every turn that does have
     # its transcript as fast as it is now.
     blind_min_silence_ms: float = 250.0
-    # The same floor for a SHORT utterance with no transcript yet, which is
-    # where a filler like "ఆ" lives. Sized to outlast Sarvam's ~0.35s so the
-    # words actually arrive and the text half of the decision can be used.
-    blind_short_silence_ms: float = 450.0
     # How close to the trained threshold still counts as "nearly certain".
     # 0.95 measured best on the 1,393 labelled clips: p50 wait on turn_end
     # clips is UNCHANGED at 0.057s, mean rises 0.115 -> 0.139s, and mid-turn
@@ -564,28 +560,7 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         # was measured across 589 bursts at four settings and moved the cut-off
         # rate by exactly nothing.
         elif not self.text_is_fresh:
-            blind = self._params.blind_min_silence_ms / 1000.0
-            # A SHORT blind utterance waits long enough for its own transcript.
-            #
-            # Run 819. Every caller turn was the filler "ఆ" followed, a moment
-            # later, by the real sentence -- and the agent answered the filler.
-            # He hung up with all six fields null: "ఇతనా వరస్ట్ తెలుసా నీ కది?"
-            #
-            # `completeness` already KNOWS "ఆ" is not a turn -- it returns
-            # unfinished for it. The signal was simply not in hand yet: Sarvam
-            # delivers around 0.35s after speech ends and the decision is taken
-            # before that, so the branch above was reading the previous
-            # utterance. Waiting a little longer on a SHORT blind turn lets the
-            # transcript land, `note_text` fire, and the text floor apply.
-            #
-            # Gated on duration because that is the one thing always known at
-            # decision time, in any language. A long utterance is where prosody
-            # is reliable and a filler is unlikely, so it keeps today's speed;
-            # only the short ones -- where the model is weakest and the caller
-            # is most often still gathering the sentence -- pay for the text.
-            if self._speech_secs < MIN_CONFIDENT_TURN_S:
-                blind = max(blind, self._params.blind_short_silence_ms / 1000.0)
-            wait = max(wait, blind)
+            wait = max(wait, self._params.blind_min_silence_ms / 1000.0)
 
         return min(wait, hi)
 
@@ -627,16 +602,8 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             p = self._probability()
             if p is not None:
                 self._last_probability = p
-                # The floor the CONFIDENT path must clear while blind. It has
-                # to be the duration-aware one: run 819's "ఆ" scored above the
-                # bar and left through here at 250ms, before its own transcript
-                # existed, so the timed path's short-utterance floor was never
-                # consulted. A short blind turn now waits long enough for
-                # Sarvam (~0.35s) to say what the word actually was.
-                need = self._params.blind_min_silence_ms
-                if self._speech_secs < MIN_CONFIDENT_TURN_S:
-                    need = max(need, self._params.blind_short_silence_ms)
-                blind = not self.text_is_fresh and self._silence_ms < need
+                blind = (not self.text_is_fresh
+                         and self._silence_ms < self._params.blind_min_silence_ms)
                 if p >= self._bar() and not blind:
                     logger.debug(
                         f"[telugu-turn] finished, p={p:.2f} after "
