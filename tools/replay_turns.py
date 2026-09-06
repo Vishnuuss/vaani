@@ -139,7 +139,25 @@ def transcripts(run: dict) -> list[tuple[float, str]]:
     return out
 
 
-def _build(detector: str, sr: int, params, tt):
+# Which model artifact the analyzer loads. `TeluguTurnAnalyzer` prefers the
+# forest and falls back to the regression, so selecting the LINEAR candidate
+# means pointing the forest at a path that does not exist -- which the loader
+# already treats as "no forest, use the regression" rather than as an error.
+#
+# Without this the replay could only ever score the artifact that happens to sit
+# in the deployed path, so "is the candidate better ON A CALL" could not be
+# asked. The isolated classifier numbers do not answer it: `_wait_secs`
+# interpolates on `frac = p / bar`, so a new model changes the WAIT as well as
+# the verdict, and the two can move in opposite directions.
+_NONE = REPO / "models" / "__no_such_forest__.json"
+MODELS = {
+    "shipped":     (None, None),                      # whatever is deployed
+    "real-gbm":    (REPO / "models" / "audio_turn_real_gbm.json", None),
+    "real-linear": (_NONE, REPO / "models" / "audio_turn_real.json"),
+}
+
+
+def _build(detector: str, sr: int, params, tt, model: str = "shipped"):
     """The analyzer under test.
 
     The client's question, 6 Sep: "pipecat already has a turn detector, why are
@@ -160,11 +178,14 @@ def _build(detector: str, sr: int, params, tt):
         return LocalSmartTurnAnalyzerV3(
             sample_rate=sr,
             params=SmartTurnParams(stop_secs=tt.TeluguTurnParams().stop_secs))
+    gbm, weights = MODELS.get(model, (None, None))
     return tt.TeluguTurnAnalyzer(sample_rate=sr,
-                                 params=params or tt.TeluguTurnParams())
+                                 params=params or tt.TeluguTurnParams(),
+                                 gbm_path=gbm, weights_path=weights)
 
 
-def replay(wav: Path, run: dict, params=None, detector: str = "telugu") -> dict:
+def replay(wav: Path, run: dict, params=None, detector: str = "telugu",
+           model: str = "shipped") -> dict:
     """Feed one recorded call through the shipped analyzer, frame by frame."""
     import api.services.vaani.telugu_turn as tt
     from pipecat.audio.turn.base_turn_analyzer import EndOfTurnState
@@ -183,7 +204,7 @@ def replay(wav: Path, run: dict, params=None, detector: str = "telugu") -> dict:
     real_monotonic = tt.time.monotonic
     tt.time.monotonic = clock            # see _Clock
     try:
-        a = _build(detector, sr, params, tt)
+        a = _build(detector, sr, params, tt, model)
         # BaseTurnAnalyzer leaves `_sample_rate` at 0 until the pipeline calls
         # this; there is no pipeline here, and the vendor model divides by it.
         if hasattr(a, "set_sample_rate"):
@@ -316,6 +337,10 @@ def main() -> int:
     ap.add_argument("--all", action="store_true",
                     help="every cached recording on disk")
     ap.add_argument("--limit", type=int, default=30)
+    ap.add_argument("--model", choices=tuple(MODELS), default="shipped",
+                    help="which artifact to load: shipped = what production "
+                         "runs; real-gbm / real-linear = retrained on the REAL "
+                         "labels (turnstops_real.jsonl)")
     ap.add_argument("--detector", choices=("telugu", "smart-turn-v3"),
                     default="telugu",
                     help="telugu = our 250-tree forest; smart-turn-v3 = the "
@@ -350,7 +375,7 @@ def main() -> int:
     tot_cut = tot_burst = tot_slow = 0
     all_waits: list[float] = []
     for wav, run, label in jobs:
-        r = replay(wav, run, detector=a.detector)
+        r = replay(wav, run, detector=a.detector, model=a.model)
         if r.get("error"):
             print(f"{label:22} {r['error']}")
             continue
