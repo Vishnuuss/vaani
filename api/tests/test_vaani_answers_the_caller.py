@@ -79,7 +79,7 @@ def test_the_checklist_is_withdrawn_while_answering(text):
     """
     block = state(text).render()
     assert "STILL_NEED: []" in block
-    assert "ASK ABOUT THIS" not in block
+    assert "ASK THEM ABOUT" not in block
 
 
 @pytest.mark.parametrize("text", ASKED)
@@ -120,13 +120,13 @@ def test_the_checklist_returns_on_the_very_next_turn():
     st.render()
     st.last_user_text = "మాది కంపెనీ."
     block = st.render()
-    assert "ASK ABOUT THIS" in block
+    assert "ASK THEM ABOUT" in block
     assert "monthly_bill" in block
 
 
 def test_an_ordinary_answer_still_gets_the_next_question():
     block = state("మాది కంపెనీ.").render()
-    assert "ASK ABOUT THIS" in block
+    assert "ASK THEM ABOUT" in block
 
 
 def test_a_curious_caller_does_not_get_the_same_question_forever():

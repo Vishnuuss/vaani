@@ -813,13 +813,14 @@ class CallState:
             if nxt and not _is_booking_field(nxt) and self.questions.get(nxt):
                 follow = (
                     " THEN, in the SAME reply and only after you have actually "
-                    "answered, ask about this ONE thing, in your own words, "
-                    "phrased to follow naturally from what they just said: "
-                    f'"{self.questions[nxt]}". Keep every option it names -- '
-                    "the options are what let them answer in one word -- but "
-                    "the wording is yours. Never ask before answering. If your "
-                    "answer needed more than two sentences, leave the question "
-                    "out entirely.")
+                    f"answered, ask them about {nxt.upper()} AND NOTHING ELSE. "
+                    f'The question to cover is: "{self.questions[nxt]}". You '
+                    "MUST stay on that subject -- do not move to a different "
+                    "one -- and you must keep every option it names, because "
+                    "the options are what let them answer in one word. The "
+                    "WORDING is yours: make it follow from what they just "
+                    "said. Never ask before answering. If your answer needed "
+                    "more than two sentences, leave the question out entirely.")
                 self.pending_ask = nxt
             else:
                 self.pending_ask = ""
@@ -885,11 +886,23 @@ class CallState:
                 # The OPTIONS are the part that must survive, not the wording.
                 # So the requirement moves to the options and the phrasing goes
                 # back to the model, which is the whole reason there is one.
+                #
+                # Corrected within the hour, because the first attempt loosened
+                # too much. "ASK ABOUT THIS: <question>, in your own words" let
+                # the model choose the SUBJECT as well: probed with the client's
+                # own line "నేను బిల్లు చెప్పలేదు" (I did not say the bill), the
+                # state correctly nominated monthly_bill and the model asked
+                # about location instead -- the exact skipping being fixed. The
+                # FIELD is now named in capitals and made non-negotiable; only
+                # the phrasing is free.
                 lines.append(
-                    f'ASK ABOUT THIS: "{self.questions[nxt]}" -- keep every '
-                    "option it names, because the options are what let them "
-                    "answer in one word, but put it in your OWN words and make "
-                    "it follow from what they just said.")
+                    f"ASK THEM ABOUT {nxt.upper()} AND NOTHING ELSE. The "
+                    f'question to cover is: "{self.questions[nxt]}". You MUST '
+                    "stay on that subject even if they dodged it -- moving to a "
+                    "different question is the single thing this caller "
+                    "complains about most. Keep every option it names. The "
+                    "WORDING is yours: make it follow from what they just said, "
+                    "and if you have asked before, ask it a DIFFERENT way.")
                 self.pending_ask = nxt
                 # The client's complaint, in one word: "no confirmations". The
                 # reference agent opens nearly every turn with a two-word
