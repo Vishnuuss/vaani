@@ -309,8 +309,22 @@ def analyzer_from(strategies) -> object | None:
     two would disagree about whether the caller had finished.
     """
     for strategy in strategies or []:
-        analyzer = getattr(strategy, "_turn_analyzer", None) or getattr(
-            strategy, "turn_analyzer", None)
-        if analyzer is not None:
-            return analyzer
+        # Unwrap first. `DeferredUserTurnStopStrategy` holds the real strategy
+        # in `.inner` and defines neither `_turn_analyzer` nor `__getattr__`, so
+        # the lookup below fell straight through it and returned None -- and a
+        # None analyzer means `FillerPlayer` is constructed inert and never
+        # speaks. Enabling semantic turn completion therefore switched the
+        # fillers off, silently, at exactly the moment the gaps got longer. It
+        # took a live call to notice, and nothing failed or logged.
+        #
+        # Walked as a chain rather than one unwrap, because a wrapper can wrap
+        # a wrapper and the failure mode of getting this wrong is silence.
+        seen = 0
+        while strategy is not None and seen < 8:
+            analyzer = getattr(strategy, "_turn_analyzer", None) or getattr(
+                strategy, "turn_analyzer", None)
+            if analyzer is not None:
+                return analyzer
+            strategy = getattr(strategy, "inner", None)
+            seen += 1
     return None

@@ -36,6 +36,8 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     LLMTextFrame,
     TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -161,6 +163,21 @@ class StateInjector(FrameProcessor):
 class ReplyFilter(FrameProcessor):
     """Sanitises the reply and enforces the hard rules before TTS."""
 
+    # CLASS-level defaults, deliberately, and not only belt-and-braces.
+    #
+    # Several tests build this object with `__new__` and set the fields they
+    # care about by hand, so `__init__` never runs for them. That is how run
+    # 213 shipped: `_said` was added in `__init__` alone, every turn after the
+    # first died with "'ReplyFilter' object has no attribute '_said'", and the
+    # unit tests could not see it. Adding state here without a class default
+    # reproduces that exactly -- and it did, for thirteen tests, before this.
+    #
+    # False is also the right value on its own terms: an object that has not
+    # been told the caller is speaking must assume he is not, or it would mute
+    # every reply.
+    _user_speaking = False
+    _stale = False
+
     def __init__(self, injector: "StateInjector | None" = None,
                  filler_state=None):
         """`injector` is the voice path's call state.
@@ -189,6 +206,23 @@ class ReplyFilter(FrameProcessor):
         # అయిపోతుంది". The unit tests missed it because they build this object
         # with __new__ and set the fields by hand, so __init__ never ran.
         self._said: list[str] = []
+        # Is the caller speaking RIGHT NOW?
+        #
+        # Defect 4 of the four that got semantic turn completion reverted. With
+        # deferral the turn is never "stopped" while the LLM is being polled, so
+        # a stale marker arriving after the caller has resumed leaves the turn
+        # open -- correctly -- but nothing cancels the generation that came with
+        # it. No interruption frame is raised, because from the pipeline's point
+        # of view the bot never took the floor. So the reply is pushed to TTS on
+        # top of a caller who is mid-sentence: the exact failure the feature was
+        # added to prevent.
+        #
+        # Guarding it here rather than in the controller because this is the
+        # last processor before TTS, and the rule is worth having whatever
+        # produced the text: never speak over someone who is speaking.
+        self._user_speaking = False
+        # Set when a reply began on top of the caller. See LLMFullResponseStart.
+        self._stale = False
 
 
     def _caller_names(self) -> tuple[str, ...]:
@@ -218,6 +252,19 @@ class ReplyFilter(FrameProcessor):
         caller off for a stray asterisk would be worse than the asterisk.
         """
         if self._blocked:
+            return ""
+
+        # Never speak over someone who is speaking.
+        #
+        # `_stale` means this whole generation began while the caller was still
+        # mid-sentence, so it answers something he has since added to. Under
+        # semantic turn completion the turn is deliberately NOT stopped while
+        # the LLM is polled, so no interruption frame is raised and nothing else
+        # in the pipeline will stop this text -- from its point of view the bot
+        # never took the floor. Silently dropped rather than substituted: there
+        # is nothing to apologise for, he simply has not finished, and the next
+        # generation will answer the whole of what he said.
+        if self._stale:
             return ""
 
         # Repetition is decided ONCE, on the first chunk, before a single word
@@ -349,6 +396,11 @@ class ReplyFilter(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
+        if isinstance(frame, UserStartedSpeakingFrame):
+            self._user_speaking = True
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            self._user_speaking = False
+
         if isinstance(frame, LLMFullResponseStartFrame):
             # One sanitizer per response; it carries per-reply truncation state.
             if self._spoken.strip():
@@ -376,6 +428,16 @@ class ReplyFilter(FrameProcessor):
             # read fresh rather than captured at construction.
             self._sanitizer = ReplySanitizer(self._caller_names())
             self._spoken = ""
+            # A generation that BEGINS while the caller is mid-sentence is
+            # stale: whatever it is answering, he has since said more. Marked
+            # here for the whole reply rather than tested per fragment -- a
+            # reply that starts on top of him and continues after he pauses is
+            # still a reply to the wrong thing, and half of it is worse than
+            # none.
+            self._stale = self._user_speaking
+            if self._stale:
+                logger.warning("[turn] a reply started while the caller was "
+                               "still speaking; not speaking it")
             self._blocked = False
             await self.push_frame(frame, direction)
             return
