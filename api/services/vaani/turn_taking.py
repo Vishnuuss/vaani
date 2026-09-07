@@ -45,6 +45,7 @@ from api.schemas.workflow_configurations import (
     DEFAULT_ENDPOINT_UNSURE_BAND,
     DEFAULT_ENDPOINT_UNSURE_FLOOR_SECS,
     DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING,
+    DEFAULT_TURN_MODEL,
     DEFAULT_TURN_FRAGMENT_SECS,
     DEFAULT_TURN_MIN_SILENCE_MS,
     DEFAULT_TURN_RESUME_WINDOW_SECS,
@@ -232,7 +233,9 @@ def create_user_turn_stop_strategies(
             cutoffs_before_adapting=int(run_configs.get(
                 "turn_cutoffs_before_adapting",
                 DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING)),
-        ))
+        ),
+            model_kind=str(run_configs.get("turn_model", DEFAULT_TURN_MODEL)),
+        )
         if not analyzer.enabled:
             logger.warning(
                 "[turn] Telugu analyzer unavailable; falling back to Smart Turn "

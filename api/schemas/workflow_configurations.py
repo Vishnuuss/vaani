@@ -158,6 +158,34 @@ DEFAULT_TURN_RESUME_WINDOW_SECS = 1.0
 # two is a pattern.
 DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING = 2
 
+# WHICH trained artifact scores the turn.
+#
+# Two exist, both 16-feature, both trained on `turnstops_real.jsonl` (2,950
+# rows, 1,707 real turn ends / 1,243 real interruptions, split by CALL):
+#
+#   "forest"  audio_turn_gbm.json      250 trees. What production has run since
+#                                      28 Aug. Measured 7 Sep on real negatives:
+#                                      6.45% false cutoffs, 12.38% endable early.
+#   "linear"  audio_turn_weights.json  logistic. 2.05% / 12.62% at threshold
+#                                      0.70 -- it dominates the forest on BOTH
+#                                      halves of the promotion rule.
+#
+# Until 7 Sep this was not a choice: `TeluguTurnAnalyzer.__init__` did
+# `_load_forest(...) or _load(...)`, so a forest on disk always won and the
+# linear weights were unreachable dead code. Shipping a better linear model
+# meant DELETING the forest file. That is not a deploy, it is a demolition --
+# and it is not revertible from config, which is exactly the property a live
+# client agent needs most.
+#
+#   "timer"   no model at all. The endpoint floors decide alone. Measured
+#             7 Sep on 60 recorded calls: a model-free wait beats every
+#             trained model at equal patience, so this has to be
+#             expressible before it can be tested on a live call.
+#
+# "forest" is the default because it is what runs today. Changing this changes
+# behaviour; nothing changes until someone sets it deliberately.
+DEFAULT_TURN_MODEL = "forest"
+
 DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
@@ -444,6 +472,7 @@ class WorkflowConfigurationDefaults(BaseModel):
         default=DEFAULT_TURN_RESUME_WINDOW_SECS, ge=0.0, le=5.0)
     turn_cutoffs_before_adapting: int = Field(
         default=DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING, ge=1, le=20)
+    turn_model: Literal["forest", "linear", "timer"] = DEFAULT_TURN_MODEL
     turn_start_strategy: Literal["default", "min_words", "provisional_vad"] = (
         DEFAULT_TURN_START_STRATEGY
     )

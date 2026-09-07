@@ -329,7 +329,8 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
     def __init__(self, *, sample_rate: int | None = None,
                  params: TeluguTurnParams | None = None,
                  weights_path: Path | None = None,
-                 gbm_path: Path | None = None):
+                 gbm_path: Path | None = None,
+                 model_kind: str = "forest"):
         super().__init__(sample_rate=sample_rate)
         self._params = params or TeluguTurnParams()
         self._buffer: list[tuple[float, np.ndarray]] = []
@@ -352,8 +353,29 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         # one slower.
         self._ended_at: float | None = None
         self._cutoffs = 0
-        self.enabled = (self._load_forest(gbm_path or GBM_PATH)
-                        or self._load(weights_path or WEIGHTS_PATH))
+        # WHICH artifact scores the turn, and why it is a choice at all.
+        #
+        # This used to be `_load_forest(...) or _load(...)`: a forest on disk
+        # always won, so the logistic weights beside it were unreachable. The
+        # only way to ship a better linear model was to DELETE the forest file
+        # -- not revertible from config, which is the one property a live
+        # client agent needs. Now the caller says which, and the fallback chain
+        # still runs if the named artifact will not load.
+        #
+        # "timer" loads NOTHING on purpose. Measured 7 Sep on 60 recorded calls
+        # (235 bursts): a model-free wait beats every trained model at equal
+        # patience, so "no verdict" has to be expressible to be shippable.
+        if model_kind == "timer":
+            self._params.threshold = 1.1        # unreachable: never fires
+            self.enabled = False
+            logger.info("[telugu-turn] model DISABLED by config "
+                        "(turn_model=timer); the endpoint floors decide")
+        elif model_kind == "linear":
+            self.enabled = (self._load(weights_path or WEIGHTS_PATH)
+                            or self._load_forest(gbm_path or GBM_PATH))
+        else:
+            self.enabled = (self._load_forest(gbm_path or GBM_PATH)
+                            or self._load(weights_path or WEIGHTS_PATH))
 
     def _load_forest(self, path: Path) -> bool:
         """The boosted forest, if it was exported. Never fatal."""
