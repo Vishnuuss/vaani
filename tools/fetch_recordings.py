@@ -56,9 +56,17 @@ def fetch(url: str, dest: Path, timeout: int = 120) -> tuple[bool, int]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--index", default=".tmp/harvest/audio_index.jsonl")
-    ap.add_argument("--out", default=".tmp/audio/caller")
+    ap.add_argument("--out")
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--leg", choices=("user", "bot"), default="user",
+                    help="user = the caller isolated (what the turn detector "
+                         "scores). bot = the agent's own track, needed to know "
+                         "WHEN WE WERE TALKING -- a backchannel is defined by "
+                         "overlap, so it cannot be labelled from the caller "
+                         "alone.")
     a = ap.parse_args()
+    if not a.out:
+        a.out = f".tmp/audio/{a.leg if a.leg == 'bot' else 'caller'}"
 
     rows = [json.loads(x) for x in
             Path(a.index).read_text(encoding="utf-8").splitlines() if x.strip()]
@@ -67,12 +75,19 @@ def main() -> int:
     out = Path(a.out)
     print(f"{len(rows)} recording(s) to fetch -> {out}\n", flush=True)
 
-    ok = failed = cached = 0
+    ok = failed = cached = skipped = 0
     total = 0
+    key = "url" if a.leg == "user" else "bot_url"
     for i, row in enumerate(rows, 1):
+        url = row.get(key)
+        if not url:
+            # Index rows written before the bot leg was recorded carry no
+            # bot_url. Re-run vaani_harvest.py --audio to refresh the index.
+            skipped += 1
+            continue
         dest = out / f"wf{row['workflow']}_run{row['run']}.wav"
         existed = dest.exists()
-        good, size = fetch(row["url"], dest)
+        good, size = fetch(url, dest)
         if good:
             total += size
             if existed:
@@ -85,7 +100,8 @@ def main() -> int:
             print(f"  {i}/{len(rows)}  new={ok} cached={cached} failed={failed}  "
                   f"{total/1e6:.0f} MB", flush=True)
 
-    print(f"\n{ok} downloaded, {cached} already present, {failed} failed")
+    print(f"\n{ok} downloaded, {cached} already present, {failed} failed"
+          + (f", {skipped} had no {a.leg} url in the index" if skipped else ""))
     print(f"{total/1e6:.0f} MB in {out}")
     if failed:
         print("failures are usually runs whose audio was never written "

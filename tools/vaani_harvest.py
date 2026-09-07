@@ -171,8 +171,17 @@ def harvest(workflows: list[int], limit: int, out: Path, want_audio: bool) -> No
             with_convo += 1
 
             if want_audio and run.get("user_recording_public_url"):
+                # The BOT leg is indexed alongside the caller's, because the
+                # four-state turn ontology (complete / incomplete / backchannel
+                # / wait) cannot be labelled from the caller alone. A
+                # backchannel is defined by OVERLAP -- a short sound made while
+                # the agent was talking, after which the caller does not take
+                # the floor -- and "while the agent was talking" is only
+                # knowable from the agent's own track. The URL was in every run
+                # log all along and was simply never written down.
                 audio.append({"run": rid, "workflow": wid,
-                              "url": run["user_recording_public_url"]})
+                              "url": run["user_recording_public_url"],
+                              "bot_url": run.get("bot_recording_public_url")})
 
             history = []
             for turn in pairs:
