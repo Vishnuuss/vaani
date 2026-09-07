@@ -64,6 +64,7 @@ from pipecat.frames.frames import (
     Frame,
     InterimTranscriptionFrame,
     TranscriptionFrame,
+    UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -102,6 +103,21 @@ class PartialResponder(FrameProcessor):
                     self._reset_turn()
                     return
                 self._have_final = True
+
+            elif isinstance(frame, UserStartedSpeakingFrame):
+                # THE LATCH HAS TO BE RELEASED SOMEWHERE.
+                #
+                # `_promoted` is only cleared when the genuine final turns up and
+                # is suppressed. If that final never comes -- and with a realtime
+                # STT it often will not, because the final may already have been
+                # consumed before the turn ended -- `_promoted` stays True for
+                # the REST OF THE CALL and `_promote` returns None on every later
+                # turn. The class quietly stops doing the only thing it exists to
+                # do, and the 1.33 s comes back with nothing in the log to say so.
+                #
+                # `test_the_next_turn_starts_clean` has been failing on this since
+                # it was written.
+                self._reset_turn()
 
             elif isinstance(frame, UserStoppedSpeakingFrame):
                 promoted = self._promote(frame)

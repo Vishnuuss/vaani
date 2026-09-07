@@ -21,6 +21,7 @@ import pytest
 from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     TranscriptionFrame,
+    UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
 
@@ -71,20 +72,37 @@ async def test_a_fragment_of_what_was_already_said_is_ignored():
 
 @pytest.mark.asyncio
 async def test_a_growing_utterance_is_emitted():
-    """The aggregator must end up holding the WHOLE utterance, not its head."""
+    """The aggregator must end up holding the WHOLE utterance, not its head.
+
+    Only the NEW words are pushed, which is a correction to what this test
+    originally asserted. `LLMUserAggregator._handle_transcription` appends every
+    TranscriptionFrame of a turn to `_aggregation` and joins them at turn end, so
+    emitting the cumulative re-score whole handed the LLM
+    "నా పేరు నా పేరు రమేష్" -- a stutter, not the utterance this test's own name
+    asks for. The join below is exact.
+    """
     svc = _service()
     await svc._handle({"event": "final", "text": "నా పేరు"})
     await svc._handle({"event": "final", "text": "నా పేరు రమేష్"})
-    assert _finals(svc) == ["నా పేరు", "నా పేరు రమేష్"]
+    assert _finals(svc) == ["నా పేరు", "రమేష్"]
+    assert " ".join(_finals(svc)) == "నా పేరు రమేష్"
 
 
 @pytest.mark.asyncio
 async def test_the_same_word_in_a_LATER_turn_is_not_swallowed():
     """"సరే" answered to two different questions is two answers. The guard must
-    not leak across the turn boundary."""
+    not leak across the turn boundary.
+
+    Driven by `UserStartedSpeakingFrame` now, not `UserStoppedSpeakingFrame`,
+    which is what this test originally used. See
+    `test_a_rescore_arriving_after_speech_end_is_still_a_duplicate` for why the
+    stop frame was the wrong boundary: this model's finals land AFTER speech end
+    by design -- that IS the 0.25 s the switch is for -- so clearing the guard
+    there re-armed the run 780 duplicate on every single turn.
+    """
     svc = _service()
     await svc._handle({"event": "final", "text": "సరే"})
-    await svc.process_frame(UserStoppedSpeakingFrame(), None)
+    await svc.process_frame(UserStartedSpeakingFrame(), None)
     await svc._handle({"event": "final", "text": "సరే"})
     assert _finals(svc) == ["సరే", "సరే"]
 

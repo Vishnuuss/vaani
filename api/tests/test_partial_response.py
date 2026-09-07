@@ -22,6 +22,7 @@ import pytest
 from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     TranscriptionFrame,
+    UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
@@ -103,12 +104,27 @@ async def test_silence_emits_nothing():
 
 @pytest.mark.asyncio
 async def test_the_next_turn_starts_clean():
-    """State must reset, or turn 2 replays turn 1's words."""
+    """State must reset, or turn 2 replays turn 1's words.
+
+    This test failed from the day it was written, and on the opposite complaint
+    to the one in its name: turn 2 produced NOTHING. `_promoted` was released
+    only by a genuine late final being suppressed, so a turn whose final never
+    arrived -- routine once the STT's finals land before turn end -- latched the
+    processor off for the rest of the call, silently giving the 1.33 s back.
+
+    Released on `UserStartedSpeakingFrame`, added here. The transport's VAD emits
+    one before every utterance, so this is the live sequence, and releasing there
+    rather than on promotion leaves intact the latch that stops ONE utterance
+    being promoted twice (this processor sees two stop frames per turn: the
+    transport's, and the aggregator's upstream broadcast).
+    """
     sink = _Sink()
     r = _wire(PartialResponder(), sink)
 
+    await r.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await r.process_frame(InterimTranscriptionFrame("hyderabad", "u", ""), FrameDirection.DOWNSTREAM)
     await r.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await r.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await r.process_frame(InterimTranscriptionFrame("anantapur", "u", ""), FrameDirection.DOWNSTREAM)
     await r.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 

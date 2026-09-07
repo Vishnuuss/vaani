@@ -59,6 +59,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from typing import Any, AsyncGenerator
 from urllib.parse import urlencode
 
@@ -74,7 +75,6 @@ from pipecat.frames.frames import (
     StartFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.settings import STTSettings
@@ -89,6 +89,10 @@ URL = "wss://api.sarvam.ai/speech-to-text-realtime/ws"
 # simulated) trade first-token time for stability, which is the wrong trade for
 # the one number this whole file exists to move.
 STREAM_TYPE = "fast"
+
+# Slowest a dead socket is retried. One attempt per 20 ms audio chunk would turn
+# a Sarvam outage into a flood.
+_RECONNECT_MIN_INTERVAL_SECS = 2.0
 
 
 class SarvamRealtimeSTTService(STTService):
@@ -133,6 +137,17 @@ class SarvamRealtimeSTTService(STTService):
         # context full of duplicates and took 3.668s on a single turn, against
         # 0.351s on the previous call. Reverted within the hour.
         self._last_final = ""
+        # Every final already emitted inside the CURRENT utterance.
+        #
+        # `_last_final` alone remembers only the previous one, so a re-score that
+        # goes A -> B -> A walks straight past it: "హలో" is not a substring of
+        # "బాగున్నారా", so the second "హలో" is emitted as a second turn. That is
+        # run 780's failure mode again, one intervening segment later, and none
+        # of the six tests locked against run 780 looks back further than one
+        # message.
+        self._finals: list[str] = []
+        # Reconnect backoff, see `run_stt`.
+        self._last_connect_attempt = 0.0
 
     def can_generate_metrics(self) -> bool:
         return True
@@ -175,6 +190,12 @@ class SarvamRealtimeSTTService(STTService):
             logger.error(f"[sarvam-realtime] connect failed: {e!r}")
             self._ws = None
             return
+        if self._receive_task:
+            # A reconnect must not leave the previous task running on the dead
+            # socket. Overwriting the handle would also make it uncancellable --
+            # `_disconnect` only knows about the newest one.
+            await self.cancel_task(self._receive_task)
+            self._receive_task = None
         self._receive_task = self.create_task(self._receive())
         logger.info(f"[sarvam-realtime] connected, {self._language}, "
                     f"{self.sample_rate} Hz, stream_type={self._stream_type}")
@@ -195,6 +216,19 @@ class SarvamRealtimeSTTService(STTService):
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame | None, None]:
         """Send one chunk. Transcripts come back on the receive task."""
         if self._ws is None:
+            # A DEAD SOCKET MUST NOT BE PERMANENT.
+            #
+            # `start()` calls `_connect()` once and swallows the failure by
+            # design, so a single refused connection at call setup used to leave
+            # `_ws` None for good: every later chunk returned here, no reconnect
+            # was ever attempted, and the agent was deaf for the whole call
+            # while the greeting, the LLM, the TTS and the dashboard all
+            # continued to look healthy. That is the same silent deafness this
+            # file already goes out of its way to make loud for quota errors.
+            now = time.monotonic()
+            if now - self._last_connect_attempt >= _RECONNECT_MIN_INTERVAL_SECS:
+                self._last_connect_attempt = now
+                await self._connect()
             yield None
             return
         try:
@@ -208,6 +242,7 @@ class SarvamRealtimeSTTService(STTService):
             # conversation moving on audio alone meanwhile.
             logger.warning(f"[sarvam-realtime] send failed, reconnecting: {e!r}")
             self._ws = None
+            self._last_connect_attempt = time.monotonic()
             await self._connect()
             yield ErrorFrame(error=f"Sarvam realtime send failed: {e}", exception=e)
         yield None
@@ -263,31 +298,73 @@ class SarvamRealtimeSTTService(STTService):
             # "నా పేరు" then "నా పేరు రమేష్" -- does grow, and is emitted so the
             # aggregator holds the whole utterance rather than its first
             # fragment.
-            if text == self._last_final or (
+            #
+            # The guard looks at the WHOLE utterance, not just the previous
+            # message. A re-score that goes A -> B -> A is still one caller
+            # saying A once, and comparing against `_last_final` alone lets the
+            # repeat through -- "హలో" is not a substring of "బాగున్నారా".
+            if text in self._finals or (
                 self._last_final and text in self._last_final
             ):
                 logger.debug(f"[sarvam-realtime] duplicate final ignored: {text!r}")
                 return
+            # ONLY THE NEW WORDS GO DOWN THE PIPE.
+            #
+            # The aggregator CONCATENATES every TranscriptionFrame in a turn --
+            # `LLMUserAggregator._handle_transcription` appends each one to
+            # `_aggregation` and joins them at turn end. So pushing a cumulative
+            # re-score whole ("నా పేరు", then "నా పేరు రమేష్") hands the LLM
+            # "నా పేరు నా పేరు రమేష్": a stutter, not the utterance.
+            #
+            # Sending the delta is right either way this endpoint behaves. If a
+            # final is cumulative the prefix is stripped and the join is exact;
+            # if it is a fresh segment it does not start with the previous one,
+            # nothing is stripped, and the join is exact too. It is never worse
+            # than sending the whole string.
+            emit = text[len(self._last_final):].strip() if (
+                self._last_final and text.startswith(self._last_final)
+            ) else text
             self._last_final = text
+            self._finals.append(text)
+            if not emit:
+                return
             # `finalized=True` is what makes the base class report TTFB against
             # this frame rather than waiting out its timeout, so the number in
             # the call log is the real speech-end-to-text figure.
             frame = TranscriptionFrame(
-                text, self._user_id, time_now_iso8601(),
+                emit, self._user_id, time_now_iso8601(),
                 self._language_enum(), result=msg)
             frame.finalized = True
             await self.push_frame(frame)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        """Forget the utterance at every turn boundary.
+        """Forget the utterance when the NEXT one starts, and only then.
 
-        Without this the duplicate guard would leak across turns and swallow a
-        caller who genuinely repeats himself -- "సరే" answered twice to two
-        different questions is two answers, not a re-score.
+        Without any reset the duplicate guard would leak across turns and
+        swallow a caller who genuinely repeats himself -- "సరే" answered twice to
+        two different questions is two answers, not a re-score.
+
+        But `UserStoppedSpeakingFrame` is the wrong place to do it, which is how
+        this was originally written. The whole reason this model is wanted is
+        that its finals land AFTER speech end -- 0.09-0.12 s after, which is the
+        0.25 s the switch is for. So the ordinary live sequence is
+
+            final "హలో" ... UserStoppedSpeaking ... re-scored final "హలో"
+
+        and clearing on the stop frame armed the second copy to be pushed as a
+        second turn. `PartialResponder` does not cover it either: it suppresses a
+        late final only when it PROMOTED a partial, and here a real final had
+        already arrived, so it stands aside. That is run 780 through a narrower
+        window.
+
+        `UserStartedSpeakingFrame` is the boundary that means "new speech", and
+        it is emitted by the transport's VAD before any of the next utterance's
+        transcripts can arrive.
         """
         await super().process_frame(frame, direction)
-        if isinstance(frame, (UserStartedSpeakingFrame, UserStoppedSpeakingFrame)):
+        if isinstance(frame, UserStartedSpeakingFrame):
             self._last_final = ""
+            self._finals = []
 
     def _language_enum(self) -> Language | None:
         try:
