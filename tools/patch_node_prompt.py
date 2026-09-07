@@ -28,7 +28,19 @@ for line in Path(".env").read_text(encoding="utf-8").splitlines():
     if "=" in line and not line.startswith("#"):
         k, v = line.split("=", 1)
         env[k.strip()] = v.strip().strip('"').strip("'")
-BASE = "https://voice.bswealthfinance.com"
+# Which install to edit. This tool was written when there was one, and it was
+# voice.bswealthfinance.com. The agents that matter now live on Vaani, and
+# writing a Vaani prompt to the old Dograh would edit a different client's live
+# agent -- so the server is a choice, mirroring publish_workflow.py, and it
+# still DEFAULTS to voice so no existing invocation changes meaning.
+#
+#     python tools/patch_node_prompt.py --workflow 2 --node agent #         --file .tmp/p.md --server vaani --dry-run
+SERVERS = {
+    "voice": ("https://voice.bswealthfinance.com", "DOGRAH_API_KEY"),
+    "vaani": (env.get("VAANI_SERVER_API_URL", "https://vaani-api.bswealthfinance.com"),
+              "VAANI_SERVER_API_KEY"),
+}
+BASE = SERVERS["voice"][0]
 KEY = env["DOGRAH_API_KEY"]
 
 
@@ -47,8 +59,18 @@ def main() -> int:
     ap.add_argument("--workflow", type=int, required=True)
     ap.add_argument("--node", required=True, help="node id, e.g. 1, 2, 0, 4")
     ap.add_argument("--file", required=True, help="UTF-8 file holding the new prompt")
+    ap.add_argument("--server", choices=sorted(SERVERS), default="voice",
+                    help="which install to edit (default: voice)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+
+    # Repoint BEFORE the first request. Reading the definition from one install
+    # and writing it to another would overwrite a different client's agent with
+    # this one's prompt, and the read would look perfectly normal.
+    global BASE, KEY
+    BASE, key_name = SERVERS[a.server]
+    KEY = env[key_name]
+    print(f"server: {a.server}  {BASE}")
 
     new_prompt = Path(a.file).read_text(encoding="utf-8")
 
