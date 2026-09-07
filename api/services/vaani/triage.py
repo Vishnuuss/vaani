@@ -94,12 +94,41 @@ ALREADY_ANSWERED = re.compile(
 # The two patterns are opposites and cannot both fire: "చెప్పాను" (I said) has
 # no negative suffix, and every alternative here requires one.
 NOT_YET_ANSWERED = re.compile(
-    r"(చెప్ప(లేదు|లేద|లేను|లే|లా)|తెలుసుకో(లేదు|లేద)|అడగ(లేదు|లేద)"
+    r"(చెప్ప(లేదు|లేద|లే|లా)|తెలుసుకో(లేదు|లేద)|అడగ(లేదు|లేద)"
     r"|ఆన్సర్\s*(చేయ|ఇవ్వ)(లేదు|లేద|లేక)|ఇంకా\s*చెప్ప|చెప్పనే\s*లేదు"
     r"|(ముందుకు|నెక్స్ట్).{0,18}(పోతున్|పోయిన|వెళ్ళ|వెళ్త)"
     r"|नहीं\s*बताया|अभी\s*तक\s*नहीं"
     r"|did\s*n[o']?t\s+(tell|say|answer)|haven[o']?t\s+(told|said|answered)"
     r"|you\s+skipped|why.{0,30}next\s+question)",
+    re.IGNORECASE)
+
+
+# --- "I cannot tell you that" -------------------------------------------------
+# The exact opposite of NOT_YET_ANSWERED, and one character away from it.
+#
+#     చెప్పలేదు   past negative    "I did NOT say it"    -> you skipped me, ask again
+#     చెప్పలేను   ability negative "I CANNOT say it"     -> a refusal, move on
+#
+# `లేను` sat inside the NOT_YET_ANSWERED alternation, so a caller declining a
+# question was read as a caller complaining he had been skipped -- and the
+# handler for that is `_refund_ask`, which puts the field BACK into
+# `still_need` and gives back the ask that was spent on it. A refusal therefore
+# reset the two-ask budget instead of ending it, and the agent could ask the
+# same thing without limit. Run 844: "నేను చెప్పలేను" and the bill was asked
+# four times, twice after he had declined it.
+#
+# The client's description is exact: "if customer don't want to answer, skip
+# the answer". This is the signal that lets that happen.
+CANNOT_ANSWER = re.compile(
+    r"(చెప్పలేను|చెప్పలేము|చెప్పను|చెప్పదల్చుకోలేదు"
+    r"|తెలియదు|తెలీదు|గుర్తు\s*లేదు|గుర్తుకు\s*రావట్లేదు"
+    r"|ఇవ్వను|ఇవ్వలేను|అవసరం\s*లేదు"
+    r"|नहीं\s*बताऊंगा|मुझे\s*नहीं\s*पता"
+    # `can\s*n[o']?t` cannot match "can't": the apostrophe stands WHERE the n
+    # would be, so the alternatives are spelled out rather than assembled.
+    r"|(i\s+)?(can[o'’n]*t|cannot|can\s+not|won[o'’]?t"
+    r"|do\s*n[o'’]?t\s+want\s+to)\s+(say|tell|share|give)"
+    r"|do\s*n[o']?t\s+know|no\s+idea|not\s+sure)",
     re.IGNORECASE)
 
 
@@ -316,6 +345,28 @@ def triage(text: str) -> Triage:
 MAX_REFUNDS_PER_FIELD = 1
 
 
+def _abandon_ask(state, why: str) -> None:
+    """Spend the field's whole budget, so it leaves `still_need` for good.
+
+    The mirror of `_refund_ask`. A caller who has declined a question does not
+    need it asked again in different words -- he needs it dropped. Pushing the
+    count to the cap is how a field leaves the checklist, and it is the same
+    door the two-ask budget already uses, so nothing downstream has to learn a
+    new state.
+    """
+    field_name = (getattr(state, "pending_ask", "")
+                  or getattr(state, "last_asked", "") or "")
+    counts = getattr(state, "ask_counts", None)
+    if not field_name or counts is None:
+        return
+    cap = getattr(state, "MAX_ASKS_PER_FIELD", 2)
+    if counts.get(field_name, 0) >= cap:
+        return
+    counts[field_name] = cap
+    state.last_asked = ""
+    logger.info(f"triage: abandoning {field_name!r} -- {why}")
+
+
 def _refund_ask(state, why: str) -> None:
     """Give back the ask that was spent on a turn the caller never completed."""
     field_name = (getattr(state, "pending_ask", "")
@@ -438,6 +489,11 @@ def apply(state, text: str) -> Triage:
     # పోతున్నావ్", "బిల్లు తెలుసుకోలేదు కదా" -- while the field he was asking
     # for sat abandoned at its two-ask cap. Refunding puts it back in
     # `still_need`, which is the only thing that lets the agent ask it again.
+    # Checked BEFORE the "you skipped me" branch: the two are one character
+    # apart and the wrong reading costs the caller the same question again.
+    elif CANNOT_ANSWER.search(text or ""):
+        _abandon_ask(state, "the caller declined to answer it")
+
     elif NOT_YET_ANSWERED.search(text or ""):
         _refund_ask(state, "the caller says he has not answered it yet")
 
