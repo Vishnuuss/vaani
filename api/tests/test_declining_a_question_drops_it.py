@@ -107,6 +107,32 @@ def test_the_one_character_that_separates_them():
     assert CANNOT_ANSWER.search(cannot)
 
 
+def test_abandon_falls_back_to_the_head_of_the_checklist():
+    """`pending_ask` is routinely empty by the time a refusal is triaged.
+
+    It is cleared as soon as a reply is produced, and `last_asked` with it, so
+    an abandon that depends on either does nothing at all -- silently. Run 845
+    is that bug: the caller said "నేను చెప్పలేను" and was asked the bill twice
+    more, with the fix deployed.
+    """
+    from api.services.vaani.triage import _abandon_ask
+
+    class S:
+        MAX_ASKS_PER_FIELD = 2
+        pending_ask = ""
+        last_asked = ""
+        still_need = ["monthly_bill", "location"]
+        ask_counts = {}
+
+    s = S()
+    _abandon_ask(s, "declined")
+    assert s.ask_counts.get("monthly_bill") == 2, (
+        "with pending_ask empty the head of still_need is the field being "
+        "answered; without this fallback the refusal is silently ignored"
+    )
+    assert s.ask_counts.get("location") is None, "only the current field"
+
+
 def test_abandon_spends_the_whole_budget():
     """`_abandon_ask` must push the field out of `still_need`, not nudge it."""
     from api.services.vaani.triage import _abandon_ask

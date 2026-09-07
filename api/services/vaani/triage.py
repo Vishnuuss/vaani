@@ -354,8 +354,16 @@ def _abandon_ask(state, why: str) -> None:
     door the two-ask budget already uses, so nothing downstream has to learn a
     new state.
     """
+    # Falls back to the HEAD OF THE CHECKLIST, like the `already_answered`
+    # path above. `pending_ask` is cleared as soon as a reply is produced and
+    # `last_asked` with it, so by the time the caller's refusal is triaged both
+    # are routinely empty -- and without this fallback the function returned
+    # having done nothing, silently. Measured on run 845: the caller said
+    # "నేను చెప్పలేను" and was asked the bill twice more.
+    still = getattr(state, "still_need", None) or []
     field_name = (getattr(state, "pending_ask", "")
-                  or getattr(state, "last_asked", "") or "")
+                  or getattr(state, "last_asked", "")
+                  or (still[0] if still else ""))
     counts = getattr(state, "ask_counts", None)
     if not field_name or counts is None:
         return
@@ -364,6 +372,7 @@ def _abandon_ask(state, why: str) -> None:
         return
     counts[field_name] = cap
     state.last_asked = ""
+    state.pending_ask = ""
     logger.info(f"triage: abandoning {field_name!r} -- {why}")
 
 
