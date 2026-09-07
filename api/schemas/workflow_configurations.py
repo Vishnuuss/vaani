@@ -341,6 +341,36 @@ DEFAULT_LLM_HEDGE = 3
 # who is complaining about quality.
 DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.45
 
+# --- Barge-in confidence gate ----------------------------------------------
+# See api/services/vaani/barge_in.py for the full argument. Short version:
+# every user-turn start broadcasts an interruption unconditionally, and with
+# the live config (turn_start_strategy=min_words, turn_start_min_words=1) one
+# Telugu backchannel syllable -- "ఆ", "సరే", "అవును" -- cuts the bot off
+# mid-sentence. These keys make the interruption a decision instead of a
+# constant.
+#
+# OFF by default, on purpose. This is a capability, not a behaviour change:
+# with `barge_in_gate_enabled` False nothing is constructed at all and the turn
+# strategies are the exact objects they were before. The other four values are
+# only reachable once someone flips that switch deliberately.
+DEFAULT_BARGE_IN_GATE_ENABLED = False
+# Below this a "turn start" is a cough, a line click or an acknowledgement.
+# Chosen under the shortest real Telugu refusal, "వద్దు", so that a caller who
+# means it still gets through: the cost of being wrong in this direction is a
+# caller who cannot interrupt, which is the worse failure.
+DEFAULT_BARGE_IN_MIN_SPEECH_SECS = 0.35
+# Speech must be this many times the ambient floor on the caller's own leg.
+# 0 disables the check entirely; it is also skipped whenever the floor has not
+# been measured yet, so it can never mute the first seconds of a call.
+DEFAULT_BARGE_IN_MIN_RMS_RATIO = 1.8
+# Longer than this and it is a sentence, not an acknowledgement, whatever the
+# words are. "సరే అండి" is two.
+DEFAULT_BARGE_IN_MAX_BACKCHANNEL_WORDS = 2
+# Consult the transcript when one has arrived. It usually has NOT by the time
+# the interruption decision is made -- STT is slower than the turn start -- so
+# this is a bonus signal, not the mechanism.
+DEFAULT_BARGE_IN_LEXICAL = True
+
 # BACK ON, after the design was corrected. Read the history before changing it.
 #
 # It was switched off the night it shipped, on this evidence:
@@ -503,6 +533,16 @@ class WorkflowConfigurationDefaults(BaseModel):
         default_factory=list,
         max_length=MAX_EXTERNAL_PBX_LEAD_HEADERS,
     )
+    # Barge-in confidence gate. Appended at the end deliberately -- the fields
+    # above are not reordered. Defaults reproduce today's behaviour exactly.
+    barge_in_gate_enabled: bool = DEFAULT_BARGE_IN_GATE_ENABLED
+    barge_in_min_speech_secs: float = Field(
+        default=DEFAULT_BARGE_IN_MIN_SPEECH_SECS, ge=0.0, le=3.0)
+    barge_in_min_rms_ratio: float = Field(
+        default=DEFAULT_BARGE_IN_MIN_RMS_RATIO, ge=0.0, le=20.0)
+    barge_in_max_backchannel_words: int = Field(
+        default=DEFAULT_BARGE_IN_MAX_BACKCHANNEL_WORDS, ge=1, le=6)
+    barge_in_lexical: bool = DEFAULT_BARGE_IN_LEXICAL
 
     @field_validator("external_pbx_lead_headers", mode="before")
     @classmethod

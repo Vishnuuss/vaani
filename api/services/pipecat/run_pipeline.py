@@ -54,6 +54,7 @@ from api.services.pipecat.speculation.coordinator import SpeculationCoordinator
 from api.services.pipecat.speculation.gate import SpeculativeLLMGate
 from api.services.pipecat.speculation.probe import SpeculationProbe
 from api.services.vaani import latency as vaani_latency
+from api.services.vaani.barge_in import apply_barge_in_gate
 from api.services.vaani.partial_response import PartialResponder
 from api.services.vaani.end_call_bridge import EndCallBridge
 from api.services.vaani import turn_taking as vaani_turn_taking
@@ -1035,6 +1036,14 @@ async def _run_pipeline_impl(
         user_turn_start_strategies = _create_non_realtime_user_turn_start_strategies(
             run_configs,
             uses_external_turns=uses_external_turns,
+        )
+        # WHICH caller sounds may stop the bot. Whether the turn STARTS is
+        # decided above and is not touched here; this only gates the
+        # interruption that the turn start would otherwise broadcast
+        # unconditionally. Returns the same list untouched unless
+        # `barge_in_gate_enabled` is set, which it is not by default.
+        user_turn_start_strategies = apply_barge_in_gate(
+            user_turn_start_strategies, run_configs
         )
         turn_start_strategy = run_configs.get(
             "turn_start_strategy", DEFAULT_TURN_START_STRATEGY
