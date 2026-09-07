@@ -133,8 +133,15 @@ TONE: tuple[Cue, ...] = (
 
 OBJECTIONS: tuple[Cue, ...] = (
     _c("too_expensive",
-       r"(ఖరీదు|కాస్ట్లీ|రేటు\s*ఎక్కువ|ధర\s*ఎక్కువ|డబ్బు\s*ఎక్కువ|భారం"
-       r"|too\s+(expensive|costly)|price\s+is\s+high)",
+       # Every alternative here demanded the caller SAY it is high ("రేటు
+       # ఎక్కువ"). Measured over 3,104 real caller utterances this rule fired
+       # zero times, while 20 utterances raised cost -- and what they actually
+       # say is "ముందు రేటు చెప్పండి" (tell me the rate first), three times in
+       # one call. A bare price demand is the same objection arriving earlier,
+       # and it is the moment the answer matters most.
+       r"(ఖరీదు|కాస్ట్లీ|రేటు|ధర|ఖర్చు|కాస్ట్|భారం|డబ్బు\s*ఎక్కువ"
+       r"|ఎంత\s*(అవుతుంది|ఖర్చు|పడుతుంది)"
+       r"|too\s+(expensive|costly)|price\s+is\s+high|how\s+much\s+(is|does))",
        "Do not argue it is cheap and do not discount unasked. Set it against a "
        "cost he ALREADY pays every month, using his own figure. One rebuttal.", 80),
     _c("no_money",
@@ -183,17 +190,34 @@ OBJECTIONS: tuple[Cue, ...] = (
        "Company name, the REAL source of his number from your business facts, "
        "and offer removal before he asks. Never invent a source.", 91),
     _c("too_many_calls",
+       # Zero matches over 3,104 utterances, while nine callers asked not to be
+       # rung again -- "మీరు మళ్ళీ మళ్ళీ కాల్ చేయొద్దండి", "ఫోన్ చేయొద్దు అండి",
+       # "ఇక కాల్ చేయొద్దు". This rule only recognised the mild complaint and
+       # missed every outright request to stop, which is the one form that is
+       # not merely an objection but a compliance obligation.
        r"(చాలా\s*మంది\s*కాల్|రోజూ\s*కాల్|ప్రతిరోజూ\s*ఫోన్"
-       r"|too\s+many\s+calls|everyone\s+keeps\s+calling)",
+       r"|మళ్ళీ\s*మళ్ళీ\s*(కాల్|ఫోన్)"
+       r"|(కాల్|ఫోన్)\s*చేయ(కండి|వద్దు|ొద్దు)"
+       r"|too\s+many\s+calls|everyone\s+keeps\s+calling"
+       r"|do\s*n[o']?t\s+call|stop\s+calling)",
        "That is a complaint, not an objection. Apologise once, offer removal, "
        "and do not sell into it.", 93),
     _c("is_it_free",
-       r"(ఫ్రీనా|ఉచితమా|డబ్బు\s*కట్టాలా|ఛార్జ్\s*ఉందా|ఎంత\s*కట్టాలి"
-       r"|is\s+it\s+free|any\s+charge)",
+       # Sarvam leaves "free" in Latin script mid-Telugu ("free అని ఇస్తారా?"),
+       # which none of the Telugu-script alternatives could match.
+       r"(ఫ్రీ|ఉచిత|డబ్బు\s*కట్టాలా|ఛార్జ్\s*ఉందా|ఎంత\s*కట్టాలి"
+       r"|free|is\s+it\s+free|any\s+charge)",
        "Answer plainly and immediately -- yes or no and why, in one sentence. "
        "Any vagueness here confirms he was right to suspect you.", 89),
     _c("rented",
-       r"(అద్దె|రెంట్|సొంతం\s*కాదు|అద్దెకు\s*ఉంటు"
+       # `రెంట్` carries a virama and therefore never matches `రెంటెడ్`, which
+       # is how Sarvam transliterates the English "rented" -- the single most
+       # common way these callers say it. Run 837 said it TWICE ("మేము రెంటెడ్
+       # హౌస్ లో ఉంటాం", "మేము ఉండేది రెంటెడ్ హౌసు"), matched neither, was never
+       # disqualified, and was pushed all the way to a site-survey offer before
+       # hanging up. Matching the stem `రెంట` covers రెంట్/రెంటెడ్/రెంటల్/రెంట్‌కే
+       # alike; the near-neighbour "రెండు" (two) uses డ, not ట, so it is safe.
+       r"(అద్దె|రెంట|సొంతం\s*కాదు|సొంత\s*ఇల్లు\s*కాదు"
        r"|rented|not\s+my\s+(house|place)|on\s+rent)",
        "Do not push past this. Ask whether the owner would consider it, and if "
        "not, thank him and close -- he is not the decision-maker.", 88),
