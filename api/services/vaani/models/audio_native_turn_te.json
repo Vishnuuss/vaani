@@ -1,0 +1,8 @@
+{
+  "threshold": 0.9359999999999993,
+  "window_secs": 8.0,
+  "sample_rate": 16000,
+  "freeze_below": 3,
+  "endable_early_at_2pct": 0.10784313725490197,
+  "note": "fine-tuned whisper-tiny encoder, Telugu, by-call split"
+}
