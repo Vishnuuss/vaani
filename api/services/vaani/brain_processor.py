@@ -138,6 +138,10 @@ class StateInjector(FrameProcessor):
         result = triage.apply(self.state, text)
         # Give the state block something concrete to acknowledge.
         self.state.last_user_text = text.strip()
+        # Before the reply is built, not after: the extractor is async and
+        # lands a turn late, so without this the state block still lists the
+        # field he just answered and the model dutifully asks again. Run 853.
+        self.state.note_answer_to_last_ask(text)
         self.state.advance()
         if result.any:
             logger.info(f"triage: {result}")

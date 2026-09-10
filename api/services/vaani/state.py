@@ -19,7 +19,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 
-from api.services.vaani import amounts, booking, coach
+from api.services.vaani import amounts, booking, coach, completeness
 from api.services.vaani.corrections import is_correction
 
 
@@ -205,6 +205,7 @@ class CallState:
     def still_need(self) -> list[str]:
         return [f for f in self.required_fields
                 if f not in self.known
+                and f not in self.answered_pending
                 and self.ask_counts.get(f, 0) < self.MAX_ASKS_PER_FIELD]
 
     @property
@@ -557,6 +558,38 @@ class CallState:
     # refund has to know. Cleared when refunded, so one interruption cannot
     # give back two asks.
     last_asked: str = ""
+    # Fields the caller has ANSWERED THIS TURN but the extractor has not
+    # confirmed yet.
+    #
+    # Run 853. The agent asked where he lived, he answered, and the very next
+    # sentence repeated his answer back AND asked for it again:
+    #
+    #     "good, Anandpur. which city or region do you live in?"
+    #
+    # He said so himself: "why are you asking again?"
+    #
+    # Nothing was broken in the model or the prompt. `extractor.py` is
+    # deliberately ASYNC and off the critical path, so its answer lands a turn
+    # LATE -- by design, because that is worth ~0.3s a turn. Until it lands,
+    # `known` does not hold the field, `still_need` still lists it, and the
+    # state block is the last and most authoritative thing the model reads.
+    # It asked again because we told it to.
+    #
+    # The repeat guard did not save it either, and that half matters more:
+    # `_is_repeat` compares the WORDS of two replies, and these two questions
+    # were worded differently. A guard on wording cannot catch a repeat of
+    # SUBJECT.
+    #
+    # So the subject is tracked. If we spoke a question about a field and the
+    # caller then said something substantive, that field leaves STILL_NEED for
+    # one turn. If the extractor confirms it, it moves to `known` and never
+    # returns. If it finds nothing -- he dodged, or STT garbled it -- the field
+    # comes back next turn and the two-ask budget still applies, so a dodged
+    # question is asked once more and no more.
+    #
+    # Deliberately NOT a rule about locations. The same failure asked his name
+    # twice and the site survey three times on that one call.
+    answered_pending: set = field(default_factory=set)
     # How many times each field has been GIVEN BACK after the caller was cut
     # off or said he had not answered. Bounded in triage, because a refund the
     # caller can trigger at will is not a budget.
@@ -610,6 +643,47 @@ class CallState:
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
     asked: list = field(default_factory=list)
+
+    def note_answer_to_last_ask(self, text: str) -> None:
+        """Record that the caller has just answered the question we asked.
+
+        Called once per user turn, BEFORE the reply is generated, which is the
+        whole point: `extractor.py` is async and its verdict lands a turn late,
+        so without this the model is still told to ask for the thing it was
+        just told. Run 853 is the worked example -- see `answered_pending`.
+
+        The bar for "answered" is deliberately low. It is not "did he give a
+        usable value" -- that is the extractor's job and it is better at it.
+        It is only "did he respond to the subject at all", because asking a man
+        the same question twice in a row is worse than carrying a null for one
+        more turn.
+
+        Cleared first, every turn, so the suppression lasts exactly one turn.
+        If the extractor confirms the value it moves to `known` and never comes
+        back; if it finds nothing, the field returns next turn and the two-ask
+        budget still bounds it.
+        """
+        self.answered_pending = set()
+        field_asked = self.last_asked
+        if not field_asked or field_asked in self.known:
+            return
+        said = (text or "").strip()
+        # NOT `strip_fillers`: it deliberately returns the original when
+        # stripping would empty it, because a bare "ఉమ్" is a real answer to
+        # "is anyone there?" and an empty name is worse than a wrong one
+        # (run 314). That is right for STORING a value and wrong for asking
+        # "was this an answer at all", so the tokens are read directly.
+        toks = [t.strip(completeness._PUNCT).lower() for t in said.split()]
+        if not toks or all(t in completeness.HESITATIONS or not t for t in toks):
+            # Pure filler -- "ఆ", "సరే", "హా". He is listening, not answering,
+            # and treating a backchannel as an answer would silently drop the
+            # question and store a null.
+            return
+        if _is_question(said):
+            # He asked US something. The question we asked is still open, and
+            # the answer-first rule will bring it back after we have replied.
+            return
+        self.answered_pending.add(field_asked)
 
     def advance(self) -> None:
         """Move the phase forward based on what we actually know.
