@@ -117,9 +117,23 @@ BACKCHANNELS = frozenset({
     "ఆ", "ఆఁ", "అ", "అఁ", "హా", "హ", "హు", "హ్మ్", "ఊ", "ఉ", "ఊఁ",
     "సరే", "సరేనండి", "సరేనం", "అవును", "ఔను", "ఓకే", "అలాగే", "మ్మ్",
     "అండి", "సార్",
+    # --- added 10 Sep, from `tools/mine_backchannels.py` ------------------
+    #
+    # Every one of these is a TRANSCRIPTION VARIANT of a sound already in the
+    # set above, not a new word, and that distinction is the entire safety
+    # argument. The miner read all 2,097 run logs and found only 106 distinct
+    # one-word caller utterances; the frequent ones that are NOT already here
+    # are all CONTENT -- "సొంతమే" (it's owned) 79, "చెప్పండి" (tell me) 102,
+    # "లేదు" (no) 17 -- and each is said in answer to a question 85-100% of the
+    # time. Adding a content word here would make the agent deaf to an answer.
+    # So the set grows sideways only, into spellings of sounds already accepted.
+    "ఆహా", "ఆఁహా", "ఊం", "ఆం", "అం", "హూ", "హుఁ", "హ్మ్మ్", "మ్",
+    "ఉమ్", "సరేనండీ", "సరేలే", "ఓకె", "అలాగేనండి", "ఆఁఆఁ", "అవునౌను",
     # Latin-script spellings Sarvam/Deepgram emit for the same sounds
     "aa", "haa", "ha", "hmm", "hm", "mhm", "mm", "uh", "huh",
     "sare", "avunu", "ok", "okay", "yes", "yeah", "yep", "right",
+    "aan", "aam", "hoon", "ho", "acha", "achha", "sari", "saree",
+    "umm", "um", "mhmm", "uhuh", "yup", "sure", "correct", "fine",
 })
 
 # Anything here stops the bot instantly, whatever duration or energy say.
@@ -128,12 +142,40 @@ INTERRUPT_WORDS = frozenset({
     "వద్దు", "వద్దండి", "వొద్దు", "కాదు", "కాదండి",
     "వినండి", "చెప్పనివ్వండి", "ఉండండి", "ఉండు",
     "stop", "wait", "no", "hold",
+    # --- added 10 Sep, and this is the half the hand-written list missed ---
+    #
+    # The miner surfaced a class that was nowhere in either lexicon: the
+    # caller signalling that the CHANNEL has failed. "హలో" is the single most
+    # common thing anyone says to this agent -- 381 times, three times more
+    # than the next -- and a caller saying "hello?" while the bot is talking is
+    # a caller who cannot hear it. Continuing to talk over them is the worst
+    # possible response. Same for the repair words: "ఏమన్నారు" (what did you
+    # say) 23, "ఏంది" 16, "ఏంటమ్మా" 18, "అర్థం కాలేదు" (I didn't understand) 9.
+    # These are not the caller taking the floor politely; they are the caller
+    # telling us the last sentence did not land.
+    "హలో", "హలొ", "hello", "helo", "ఏమన్నారు", "ఏమన్నారండి", "ఏంటి",
+    "ఏంది", "ఏంటమ్మా", "ఏంటండి", "ఏమిటి", "ఏమండి", "ఎవరు", "ఎవరండి",
+    # Refusal and do-not-call. These are compliance events, not conversation:
+    # "నాకు call చేయొద్దు" was said 26 times and must land on the first
+    # syllable, never after the bot finishes its paragraph.
+    "వొద్దండి", "వద్దన్నాను", "చాలు", "చాలండి", "కట్",
 })
 
 INTERRUPT_PHRASES = (
     "ఒక నిమిషం", "ఒక్క నిమిషం", "ఒకనిమిషం", "ఒక్కనిమిషం",
     "ఒక సెకను", "ఒక్క సెకను", "ఒక్క క్షణం", "ఒక క్షణం",
     "one minute", "hold on", "one second",
+    # --- added 10 Sep, each with its measured count in the run logs -------
+    "ఇంట్రెస్ట్ లేదు",            # 24 + 16 with "నాకు" -- not interested
+    "interest లేదు", "not interested",
+    "call చేయొద్దు", "కాల్ చేయొద్దు", "ఫోన్ చేయొద్దు",   # 26 -- do not call
+    "do not call", "dont call", "don t call",
+    "మనిషితో మాట్లాడ",            # 13 -- I want a human
+    "మనిషి తో మాట్లాడ", "మీరు robot", "మీరు రోబోట్",
+    "అర్థం కాలేదు", "అర్ధం కాలేదు",   # 9 -- I did not understand
+    "మాట్లాడనివ్వట్లేదు", "మాట్లాడనివ్వడం లేదు",  # 25 -- you aren't letting me speak
+    "వినండి నేను", "నేను చెప్తే వినండి",
+    "డబ్బు లేదు",                 # 15 -- no money; a hard refusal
 )
 
 # Strip punctuation ONLY.

@@ -355,10 +355,27 @@ DEFAULT_STT_FINALISATION_BUDGET_SECS = 0.45
 # only reachable once someone flips that switch deliberately.
 DEFAULT_BARGE_IN_GATE_ENABLED = False
 # Below this a "turn start" is a cough, a line click or an acknowledgement.
-# Chosen under the shortest real Telugu refusal, "వద్దు", so that a caller who
-# means it still gets through: the cost of being wrong in this direction is a
-# caller who cannot interrupt, which is the worse failure.
-DEFAULT_BARGE_IN_MIN_SPEECH_SECS = 0.35
+#
+# 0.35 was a GUESS -- chosen under the shortest real Telugu refusal, "వద్దు",
+# with no measurement behind it. It is now measured. `tools/label_backchannels.py`
+# labelled 705 caller bursts across 179 calls using BOTH legs of the audio, so
+# "he spoke while we were speaking" is known rather than assumed, and the
+# trade-off at each floor is:
+#
+#     floor   backchannels held   real interrupts delayed
+#     0.35s          37%                   8.5%     <- the guess
+#     0.50s          53%                  12.8%     <- chosen
+#     0.70s          74%                  17.4%
+#
+# 0.50 s sits just above the backchannel median of 0.46 s, which is why it is
+# the first floor that holds more than half of them. "Delayed" is the honest
+# word for the right-hand column and the reason the step is affordable: the
+# gate suppresses only `enable_interruptions`. The caller's turn still starts,
+# his words are still transcribed and still answered -- the bot merely finishes
+# the sentence it was already speaking. Nothing is ever lost, and an explicit
+# stop word ("ఆగండి", "ఇంట్రెస్ట్ లేదు", "call చేయొద్దు") is checked BEFORE this
+# floor and bypasses it entirely.
+DEFAULT_BARGE_IN_MIN_SPEECH_SECS = 0.50
 # Speech must be this many times the ambient floor on the caller's own leg.
 # 0 disables the check entirely; it is also skipped whenever the floor has not
 # been measured yet, so it can never mute the first seconds of a call.
@@ -502,7 +519,8 @@ class WorkflowConfigurationDefaults(BaseModel):
         default=DEFAULT_TURN_RESUME_WINDOW_SECS, ge=0.0, le=5.0)
     turn_cutoffs_before_adapting: int = Field(
         default=DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING, ge=1, le=20)
-    turn_model: Literal["forest", "linear", "timer"] = DEFAULT_TURN_MODEL
+    turn_model: Literal["forest", "linear", "timer", "audio-native"] = (
+        DEFAULT_TURN_MODEL)
     turn_start_strategy: Literal["default", "min_words", "provisional_vad"] = (
         DEFAULT_TURN_START_STRATEGY
     )

@@ -196,7 +196,28 @@ def create_user_turn_stop_strategies(
         # model cannot load; these three are what the model spends its verdict
         # on when it can. See DEFAULT_ENDPOINT_* for why a single number was
         # never going to work.
-        analyzer = TeluguTurnAnalyzer(params=TeluguTurnParams(
+        # `audio-native` reads the turn off the waveform through a Whisper-tiny
+        # encoder fine-tuned on this agent's own Telugu calls, instead of the 16
+        # hand-built prosody numbers. It is a SUBCLASS of TeluguTurnAnalyzer --
+        # every endpoint timer below is inherited unchanged, only the
+        # probability is replaced -- so the constructor signature is identical
+        # and a missing model file degrades to prosody rather than failing.
+        #
+        # Measured on 30 real recordings (tools/sweep_audio_native.py):
+        #   prosody forest (was live)   23.0% cut off @ 0.48s wait
+        #   audio-native                16.0% cut off @ 0.76s wait
+        # and, the check that matters, a model-free stopwatch made to wait the
+        # same 0.76s scores 20.8%. It beats the control, which the retrained
+        # linear model did not (docs 30).
+        _kind = str(run_configs.get("turn_model", DEFAULT_TURN_MODEL))
+        if _kind == "audio-native":
+            from api.services.vaani.audio_native_turn import (
+                AudioNativeTurnAnalyzer)
+            _analyzer_cls = AudioNativeTurnAnalyzer
+        else:
+            _analyzer_cls = TeluguTurnAnalyzer
+
+        analyzer = _analyzer_cls(params=TeluguTurnParams(
             stop_secs=stop_secs,
             min_endpoint_secs=float(run_configs.get(
                 "endpoint_min_secs", DEFAULT_ENDPOINT_MIN_SECS)),
