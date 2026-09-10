@@ -60,6 +60,7 @@ model is consulted at most a handful of times per turn.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -232,11 +233,45 @@ class AudioNativeTurnAnalyzer(TeluguTurnAnalyzer):
     already passes every turn regression in the suite.
     """
 
+    # The encoder runs when the AUDIO has changed, not when the clock has moved.
+    #
+    # This is a correctness requirement, not a tuning preference.
+    # `TeluguTurnAnalyzer.append_audio` calls `_probability` on EVERY audio
+    # frame once silence passes `min_silence_ms`, and frames arrive every 20 ms.
+    # Between the 120 ms probe floor and the 1.4 s endpoint ceiling that is
+    # about **64 calls per turn**. The forest costs ~1 ms and never noticed. The
+    # encoder costs 50 ms idle and over 200 ms on a loaded box, so 64 calls is
+    # 3-13 seconds of CPU inside a frame handler that has 20 ms to return. It
+    # would not have been slow, it would have been broken.
+    #
+    # A wall-clock throttle was tried first and is the wrong shape: measured, it
+    # still fired 21 times, because each inference takes longer than the frame
+    # it is standing in, so the loop falls behind and the interval keeps
+    # elapsing. Throttling on time treats the symptom.
+    #
+    # The right key is what the model actually reads. Its input is the last 8 s
+    # of the caller's audio, and while he is silent the only thing changing is
+    # the amount of trailing silence -- the speech in the window is identical,
+    # so the verdict is identical. Re-running the encoder on it buys nothing.
+    # What silence DURATION means is already the timers' job, and they still run
+    # on every single frame.
+    #
+    # So the cached verdict is reused until the caller SPEAKS again, which is
+    # the only event that puts new information in the window. In practice that
+    # is one inference per pause -- about 50 ms per turn instead of 3 seconds.
+    # `_STALE_S` is a backstop for the case where speech is accumulating without
+    # `_speech_secs` moving enough to notice.
+    _STALE_S = 0.75
+
     def __init__(self, *, sample_rate: int | None = None,
                  params: TeluguTurnParams | None = None,
                  model_path: Path | None = None, **kw):
         super().__init__(sample_rate=sample_rate, params=params, **kw)
         self._model, thr = _runtime(model_path)
+        self._probe_at = 0.0        # monotonic time of the last real inference
+        self._probe_value: float | None = None
+        self._probe_turn = -1       # which turn that cached value belongs to
+        self._probe_speech = -1.0   # how much speech was in the window then
         if self._model is not None:
             # The trained threshold, not the prosody one. `_bar()` and
             # `_wait_secs()` both read `params.threshold`, so the inherited
@@ -245,9 +280,33 @@ class AudioNativeTurnAnalyzer(TeluguTurnAnalyzer):
             self.enabled = True
 
     def _probability(self) -> float | None:
-        """P(the caller has finished), read from the tail of his own audio."""
+        """P(the caller has finished), read from the tail of his own audio.
+
+        The verdict is cached until the caller speaks again; see `_STALE_S`
+        above for why that is a correctness requirement rather than an
+        optimisation. The cache is keyed on `_turn_id` too, so a new turn can
+        never read the previous turn's verdict however fast it arrives.
+        """
         if self._model is None:
             return super()._probability()
+
+        now = time.monotonic()
+        # `_speech_secs` is the whole buffer, silence included, so it grows on
+        # every frame and is useless as a cache key -- measured, it let 32
+        # inferences through per turn. Subtracting the trailing silence gives
+        # the quantity that actually matters: how much SPEECH the window holds.
+        # That is flat for as long as the caller stays quiet and jumps the
+        # moment he says something, which is exactly when the verdict can change.
+        speech = self._speech_secs - self._silence_ms / 1000.0
+        if (self._probe_value is not None
+                and self._probe_turn == self._turn_id
+                # No new speech in the window -> the same audio -> the same
+                # answer. 10 ms of tolerance because `_speech_secs` is derived
+                # from frame sizes and wobbles in the last decimal.
+                and abs(speech - self._probe_speech) < 0.01
+                and now - self._probe_at < self._STALE_S):
+            return self._probe_value
+
         try:
             # torch is imported ONLY in the torch branch below, never here.
             # The server has no torch -- see `_runtime` -- so importing it at
@@ -281,6 +340,10 @@ class AudioNativeTurnAnalyzer(TeluguTurnAnalyzer):
                     value = float(torch.sigmoid(
                         self._model(torch.from_numpy(mel)[None])).item())
             self._last_probability = value
+            self._probe_value = value
+            self._probe_at = now
+            self._probe_turn = self._turn_id
+            self._probe_speech = speech
             return value
         except Exception as e:
             # Never fatal on a live call. Falling back to prosody is worse than
