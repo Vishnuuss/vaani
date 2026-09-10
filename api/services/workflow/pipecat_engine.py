@@ -24,6 +24,7 @@ from api.errors.failure import (
     log_failure,
 )
 from api.services.pipecat.audio_playback import play_audio
+from api.services.vaani import lead_record
 from api.services.workflow.workflow_graph import Node, WorkflowGraph
 
 if TYPE_CHECKING:
@@ -470,6 +471,22 @@ class PipecatEngine:
                         f"skipping update. Data: {extracted_data}"
                     )
                     return
+                # Guard the LEAD RECORD, not just the conversation.
+                #
+                # This line used to store raw model output. Vaani's own
+                # extractor drops an implausible bill, strips 'um' out of
+                # a name and refuses a negative fact from the absence of a
+                # yes -- weeks of real defects -- but none of that was on
+                # THIS path, and this is the path that writes the lead
+                # record and the client's webhook.
+                #
+                # Run 853: a garbled bill reached the record as
+                # `monthly_bill: 15`. Fifteen rupees is not a monthly
+                # electricity bill, and it is worse than a null -- a null
+                # is visibly missing and gets followed up, while 15 looks
+                # like an answer and nobody looks again.
+                extracted_data = lead_record.sanitise_and_log(
+                    extracted_data, node=node.name)
                 self._gathered_context.update(extracted_data)
                 extracted_variables = self._gathered_context.setdefault(
                     "extracted_variables", {}
