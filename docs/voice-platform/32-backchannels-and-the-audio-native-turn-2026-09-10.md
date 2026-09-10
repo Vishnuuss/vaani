@@ -144,7 +144,9 @@ A better classifier is not a better agent. The control this project now insists
 on is a **model-free stopwatch** made to wait the *same* amount of time — the
 comparison that reversed the linear model's promotion in doc 30.
 
-On 30 real recordings (`tools/sweep_audio_native.py`):
+On 30 real recordings (`tools/sweep_audio_native.py`) — superseded by the
+60-call numbers in section 4, and kept because the two disagree by more than
+noise, which is itself the lesson about subset sizes:
 
 | setting | cut off | wait p50 | stopwatch at same wait | verdict |
 |---|---:|---:|---:|---|
@@ -188,7 +190,10 @@ wait *plus* roughly one to three probes of encoder time.
 | Stop-signal lexicon | 38 words + 31 phrases, incl. do-not-call and "hello?" |
 | Barge-in floor | 0.35 s → 0.50 s, measured from 705 labelled bursts |
 | Barge-in gate | wired, config-gated |
-| `turn_model: audio-native` | selectable via config; nothing selects it yet |
+| `turn_model: audio-native` | selectable via config; **not yet deployed** |
+| Chosen endpoint | band 0.90, min 0.30, **ceiling 2.20, unsure floor 0.90** |
+| Measured, 60 calls | **14.5% cut off** vs the live agent's 23.0% |
+| Encoder cost | **1.5 inferences per turn** (was 64), 0.2-4.9% of realtime |
 | Four-state model | data foundation complete (705 bursts); head not trained |
 
 Tests: 55 existing pass, 8 new lock what the mining decided — including that a
@@ -204,3 +209,83 @@ content answer is never gated as noise.
   p50 1.055 s of which the LLM was 0.561 s, `reasoning_effort: low` already
   applied. The remaining lever is a non-reasoning model, which is a quality
   trade on Telugu and a decision to be made against measurements.
+
+---
+
+## 4. "if I lag more like ahhhhhhhhhhhhh, it is not waiting"
+
+The client's report, and the most useful sentence of the day, because chasing
+it found a dead guard and an unexamined ceiling.
+
+### What a drawn-out filler does to the endpoint
+
+`completeness.HESITATIONS` already knows "ఆ" and "hmm" are stalling noises, but
+it reads TEXT, and production runs `saarika:v2.5`, which emits no interim
+transcripts — no text exists until after the caller has stopped, which is after
+the decision was taken.
+
+The 16 prosody features cannot see it either. A three-second "aaaahhhh" is
+long, steady, voiced and level, which reads as a calm finished sentence in every
+one of them. Worse, because it is *long*, the fragment floor — the one guard
+that buys extra patience — does not apply: `_bar()` only raises the bar when
+`_speech_secs < fragment_secs`. **The case that most obviously needs patience is
+the case that asks for least.**
+
+### A hypothesis, measured and dropped
+
+The first idea was to detect the filler acoustically: a filled pause is a
+*steady state* — pitch, formants and energy all stop moving, while real speech
+is continuous change. `tools/measure_held_vowel.py` scores four stationarity
+numbers over the last 0.5 s of every labelled burst.
+
+**It does not separate.** Across 574 bursts from 120 calls the distributions for
+"kept going" and "finished" sit on top of each other, and spectral flux runs the
+*wrong* way (p10 0.392 continued vs 0.295 finished). Recorded here so nobody
+rebuilds it: the idea is plausible, phonetically sound, and not supported by
+this data.
+
+### The two real defects
+
+Probing the detectors directly with a synthetic held vowel found both.
+
+**The long-answer floor is dead code.** `_wait_secs` computes
+`hi - frac*(hi-lo)` = `1.40 - frac*1.10`, which cannot fall below 0.30 for any
+`frac ≤ 1`. So `unsure_floor_secs = 0.30` **never binds**. The protection built
+for run 319's caller — *"I can't even finish answering, why are you moving to the
+next question?"* — has been inert ever since `min_endpoint_secs` rose off 0.05.
+
+**`max_endpoint_secs` is a hard ceiling on patience.** `_wait_secs` ends with
+`return min(wait, hi)`. Every sweep this project has ever run held `hi` at
+1.40 s, so *"wait longer"* has never actually been on the table. A caller who
+stalls past 1.4 s gets talked over however unfinished the model says he is.
+
+### Swept, on 60 calls, against the stopwatch control
+
+| setting | cut off | wait p50 | stopwatch | verdict |
+|---|---:|---:|---:|---|
+| floor 0.30 (dead), ceiling 1.40 | 17.4% | 0.88 s | 18.1% | beats |
+| floor 0.70, ceiling 1.40 | 16.6% | **0.88 s** | 18.1% | beats |
+| floor 0.90, ceiling 1.80 | 15.7% | 1.08 s | 16.2% | *worse* |
+| **floor 0.90, ceiling 2.20** | **14.5%** | 1.08 s | 16.2% | **beats** |
+
+Raising the floor to 0.70 is **free** — 0.8 points of cut-off at an identical
+median wait — because the floor only binds on the turns the model is unsure
+about. That is the property the run-319 comment claimed and never had.
+
+The chosen setting is **floor 0.90, ceiling 2.20**: 14.5% against the live
+agent's 23.0%, **8.5 points fewer interruptions**, still beating a stopwatch
+made to wait the same 1.08 s. Note the median wait is 1.08 s and not 2.20 s —
+the ceiling is reached only where the model says clearly-unfinished. Fast when
+sure, patient when not.
+
+On the client's actual case, a held vowel now gets **1.3–1.9 s** instead of the
+1.40 s hard cap:
+
+| held "ahhh" | live (prosody) | new |
+|---:|---:|---:|
+| 0.4 s | 1.40 s | 1.94 s |
+| 3.0 s | 1.40 s | 1.71 s |
+| 8.0 s | 1.40 s | 1.63 s |
+
+Nothing here is a script or a word list. It is the same acoustic verdict feeding
+timers that were already there — two of which turned out not to be reachable.

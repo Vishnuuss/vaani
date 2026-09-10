@@ -112,6 +112,33 @@ def main() -> int:
         return 1
     print("\nverdicts identical -- safe to load in place of the .pt")
 
+    # --- the sidecar, without which the export is useless in production ---
+    #
+    # `api/Dockerfile` installs pipecat WITHOUT the `local-smart-turn` extra,
+    # and that extra is the only thing that pulls torch and transformers in.
+    # `onnxruntime` and `soxr` are pipecat BASE dependencies and are present.
+    #
+    # So on the server there is no torch, and the loader used to `import torch`
+    # on the ONNX path purely to read this one float out of the .pt. That would
+    # have thrown, fallen through to the torch fallback, thrown again, and left
+    # the agent running prosody while the config said audio-native -- a silent
+    # no-op, the worst shape a deployment bug can take.
+    #
+    # A threshold is one number. It travels beside the graph.
+    import json
+    meta = {
+        "threshold": thr,
+        "window_secs": 8.0,
+        "sample_rate": 16000,
+        "freeze_below": int(blob.get("freeze_below", 3)),
+        "endable_early_at_2pct": float(blob.get("endable_early_at_2pct", 0.0)),
+        "note": "fine-tuned whisper-tiny encoder, Telugu, by-call split",
+    }
+    side = DST.with_suffix(".json")
+    side.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"wrote {side.name} (threshold {thr:.3f}) -- the ONNX path reads this, "
+          "never the .pt, because the server has no torch")
+
     # --- int8, which is where smart-turn-v3's 12 ms comes from -------------
     #
     # Quantisation is the only lever left worth pulling: fp32 ONNX is a few

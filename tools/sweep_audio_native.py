@@ -76,16 +76,25 @@ def _run_for(wav: Path):
 
 
 GRID = {
-    "inherited (as measured)": {},
-    "min 0.25 / max 1.20":     dict(min_endpoint_secs=0.25, max_endpoint_secs=1.20),
-    "min 0.30 / max 1.00":     dict(min_endpoint_secs=0.30, max_endpoint_secs=1.00),
-    "min 0.40 / max 1.40":     dict(min_endpoint_secs=0.40, max_endpoint_secs=1.40),
-    "min 0.20 / max 0.90":     dict(min_endpoint_secs=0.20, max_endpoint_secs=0.90),
-    # The unsure band decides who gets the floor. Widening it spends patience
-    # only on the turns the model is not sure about, which is where the
-    # cut-offs actually are.
-    "band 0.90, min 0.30":     dict(unsure_band=0.90, min_endpoint_secs=0.30,
-                                    max_endpoint_secs=1.40),
+    # `_wait_secs` ends with `return min(wait, hi)`, so `max_endpoint_secs` is a
+    # HARD CEILING on patience. Every sweep this project has run held it at
+    # 1.40s, which means "wait longer" has never actually been on the table: a
+    # caller who stalls past 1.4s gets talked over however unfinished the model
+    # says he is. That is the client's complaint about a drawn-out "aaahhh".
+    #
+    # The control keeps this honest. A stopwatch gets very good as it slows
+    # down -- 5.1% at 2.24s -- so a model that only wins by waiting longer is
+    # not winning at all, and the timer column will say so.
+    "ceiling 1.40 (today)":  dict(unsure_band=0.90, min_endpoint_secs=0.30,
+                                  max_endpoint_secs=1.40, unsure_floor_secs=0.70),
+    "ceiling 1.80":          dict(unsure_band=0.90, min_endpoint_secs=0.30,
+                                  max_endpoint_secs=1.80, unsure_floor_secs=0.70),
+    "ceiling 2.20":          dict(unsure_band=0.90, min_endpoint_secs=0.30,
+                                  max_endpoint_secs=2.20, unsure_floor_secs=0.70),
+    "ceiling 1.80, floor 0.90": dict(unsure_band=0.90, min_endpoint_secs=0.30,
+                                  max_endpoint_secs=1.80, unsure_floor_secs=0.90),
+    "ceiling 2.20, floor 0.90": dict(unsure_band=0.90, min_endpoint_secs=0.30,
+                                  max_endpoint_secs=2.20, unsure_floor_secs=0.90),
 }
 
 
