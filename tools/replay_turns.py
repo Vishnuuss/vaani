@@ -171,6 +171,13 @@ def _build(detector: str, sr: int, params, tt, model: str = "shipped"):
     Both analyzers implement `append_audio(buffer, is_speech) -> EndOfTurnState`,
     so the harness feeds them identically and scores them identically.
     """
+    if detector == "audio-native":
+        # The Telugu-retrained Whisper encoder. Same endpoint timers as
+        # `telugu`, because it SUBCLASSES TeluguTurnAnalyzer -- only the
+        # probability changes, so this measures the verdict and nothing else.
+        from api.services.vaani.audio_native_turn import AudioNativeTurnAnalyzer
+        return AudioNativeTurnAnalyzer(sample_rate=sr,
+                                       params=params or tt.TeluguTurnParams())
     if detector == "smart-turn-v3":
         from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
             LocalSmartTurnAnalyzerV3)
@@ -341,7 +348,8 @@ def main() -> int:
                     help="which artifact to load: shipped = what production "
                          "runs; real-gbm / real-linear = retrained on the REAL "
                          "labels (turnstops_real.jsonl)")
-    ap.add_argument("--detector", choices=("telugu", "smart-turn-v3"),
+    ap.add_argument("--detector",
+                    choices=("telugu", "smart-turn-v3", "audio-native"),
                     default="telugu",
                     help="telugu = our 250-tree forest; smart-turn-v3 = the "
                          "model bundled with pipecat, for the bake-off")
