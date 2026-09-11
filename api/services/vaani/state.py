@@ -772,6 +772,40 @@ class CallState:
         elif self.phase is Phase.PITCHING and self.turn >= 8:
             self.phase = Phase.CLOSING
 
+    def turn_log(self) -> dict:
+        """One structured record of where this turn stood. Diagnosis, not prose.
+
+        Every failure on 11 Sep was diagnosed by reading a transcript and
+        GUESSING at the state behind it -- whether a field was known, how many
+        times it had been asked, whether the extractor had landed yet. The
+        guesses were wrong twice in one afternoon: the ask budget looked like
+        the cause of run 870 and was not, and an audit blamed the endpoint
+        timers for a floor produced by a strategy that never reads them.
+
+        A transcript shows what was said. This shows why. Small on purpose --
+        counters and keys, no free text beyond what the caller actually said,
+        so it can be emitted on every turn of every call without becoming the
+        reason calls are slow.
+        """
+        return {
+            "turn": self.turn,
+            "phase": self.phase.value,
+            "known": dict(self.known),
+            "still_need": self.still_need,
+            "abandoned": self.abandoned,
+            "asked_counts": dict(self.ask_counts),
+            "answer_counts": dict(self.answer_counts),
+            "answered_pending": sorted(self.answered_pending),
+            "pending_ask": self.pending_ask,
+            "last_asked": self.last_asked,
+            "heard": {k: list(v) for k, v in self.heard.items()},
+            "doubted": bool(self.doubted),
+            "misheard_last_turn": self.misheard_last_turn,
+            "refunds": dict(self.refunds),
+            "closings_said": self.closings_said,
+            "elapsed_s": self.elapsed_s,
+        }
+
     def render(self) -> str:
         """The compact block injected into the prompt each turn.
 

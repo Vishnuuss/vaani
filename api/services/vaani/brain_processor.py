@@ -25,6 +25,7 @@ ReplyFilter    sanitises the reply before a character reaches the speech engine.
 
 from __future__ import annotations
 
+import json
 import re
 from difflib import SequenceMatcher
 
@@ -687,5 +688,20 @@ class ReplyFilter(FrameProcessor):
                 # re-issued the identical closing instruction on every turn --
                 # seven times, to a caller asking to be let go.
                 self._injector.state.note_reply_delivered()
+
+                # One structured record per turn. Emitted HERE because this is
+                # the point where the turn is finished and every counter has
+                # settled -- the reply is spoken, the ask is charged, the
+                # closing is noted. Logged as a single line so a whole call can
+                # be read back afterwards without re-deriving state from a
+                # transcript, which is how two wrong diagnoses were reached on
+                # 11 Sep.
+                try:
+                    logger.info("[turn-log] " + json.dumps(
+                        {**self._injector.state.turn_log(),
+                         "said": said},
+                        ensure_ascii=False, default=str))
+                except Exception as exc:      # never let logging break a call
+                    logger.warning(f"[turn-log] could not be written: {exc}")
 
         await self.push_frame(frame, direction)
