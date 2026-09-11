@@ -320,6 +320,10 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         await self._release(params)
 
     async def _release(self, params: UserTurnStoppedParams) -> None:
+        # From here a reply is owed. Any turn that ends before it is spoken is
+        # part of the same breath and must not earn a second answer.
+        if self._in_flight is not None:
+            self._in_flight.owe()
         self._cancel_timer()
         self._text = ""
         self._defers = 0
@@ -369,6 +373,26 @@ class ReplyInFlight:
 
     def __init__(self):
         self.generating = False
+        self.spoken = False
+
+    def owe(self) -> None:
+        """A turn has ended, so a reply is owed -- the LLM has not started yet.
+
+        This is the window run 892 fell through. `begin()` is called when the
+        generation starts, and the second caller final can arrive BEFORE that:
+
+            36.365  USER  [second final]
+            37.545  BOT   [reply to the FIRST final]
+
+        The reply to the first was still being decided at 36.365, but nothing
+        had asked for it yet, so `unheard` was False and the turn was not
+        merged. He got two answers and said so four times, ending with
+        "డోంట్ ఫ్రస్ట్రేట్ మేడం".
+
+        A reply is owed from the moment the turn ends, not from the moment the
+        model is called.
+        """
+        self.generating = True
         self.spoken = False
 
     def begin(self) -> None:

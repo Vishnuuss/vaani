@@ -137,3 +137,43 @@ def test_a_guard_built_without_the_flag_behaves_exactly_as_before():
         assert len(rec.stops) == 1
 
     asyncio.run(go())
+
+
+# --- run 892: the window has to open when the turn ends --------------------
+
+def test_run_892_a_final_arriving_before_the_llm_starts_is_still_merged():
+    """The gap the first version left open.
+
+        36.365  USER  [second final]
+        37.545  BOT   [reply to the FIRST final]
+
+    At 36.365 the reply to the first final was owed but not yet being built,
+    so `unheard` was False and the second final earned its own answer. He said
+    so four times and finished with "డోంట్ ఫ్రస్ట్రేట్ మేడం".
+    """
+    async def go():
+        f = ReplyInFlight()
+        w, rec = _wrapped(f)
+        await _stop(w, "82 థౌసండ్")              # first turn is released
+        assert len(rec.stops) == 1
+        assert f.unheard, "a reply is owed the moment the turn ends"
+
+        await _stop(w, "నైంటీ టూ")               # second final, LLM not started
+        assert len(rec.stops) == 1, (
+            "the second final earned its own reply before the model was even "
+            "called -- run 892 exactly")
+        w._cancel_timer()
+
+    asyncio.run(go())
+
+
+def test_the_window_closes_as_soon_as_he_can_hear_the_reply():
+    async def go():
+        f = ReplyInFlight()
+        w, rec = _wrapped(f)
+        await _stop(w, "82 థౌసండ్")
+        f.note_spoken()
+        await _stop(w, "ఆగండి")
+        assert len(rec.stops) == 2, "barge-in was held; that is dead air"
+
+    asyncio.run(go())
