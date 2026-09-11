@@ -43,6 +43,22 @@ def test_the_default_is_exactly_todays_behaviour():
         "pipecat's own default. The dial exists now; it starts where it was")
 
 
+def test_the_timer_does_not_also_wait_for_the_transcript():
+    """The second, hidden wait. See run 876."""
+    strategies = _build_user_turn_stop_strategies(_dograh())
+    assert strategies[0].wait_for_transcript is False, (
+        "the strategy ends a turn only when BOTH timers are done AND a "
+        "transcript has arrived, so leaving this True puts Sarvam back on the "
+        "critical path -- which is exactly what DEFAULT_TURN_WAIT_FOR_TRANSCRIPT "
+        "was written to prevent, for the other path only")
+
+
+def test_waiting_for_the_transcript_is_still_available():
+    strategies = _build_user_turn_stop_strategies(
+        _dograh(turn_wait_for_transcript=True))
+    assert strategies[0].wait_for_transcript is True
+
+
 def test_the_wait_can_be_shortened_without_a_deploy():
     strategies = _build_user_turn_stop_strategies(
         _dograh(dograh_speech_timeout_secs=0.35))

@@ -379,9 +379,28 @@ def _build_user_turn_stop_strategies(run_configs: dict):
     # `endpoint_*` and `turn_model` values stored on wf2 are read ONLY inside
     # the `turn_analyzer` branch above. On this path they do nothing. Someone
     # set MB Solar's `endpoint_min_secs` to 0.3 and it changed nothing.
+    # `wait_for_transcript` was left at pipecat's default of True when the
+    # timeout above was first exposed, and it costs a second hidden wait.
+    #
+    # The strategy runs TWO timers and ends the turn only when both are done AND
+    # a transcript has arrived. So the turn cannot end until Sarvam returns,
+    # which puts STT back on the critical path that
+    # `DEFAULT_TURN_WAIT_FOR_TRANSCRIPT = False` was written to take it off --
+    # except that value was only ever forwarded to the turn_analyzer path, and
+    # these agents are not on it.
+    #
+    # Measured on run 876 (real call, 11 Sep, timeout already lowered to 0.35):
+    # endpoint averaged 0.861s against a theoretical 0.55s (0.35 + Silero 0.20),
+    # and STT averaged 0.391s. The gap is this wait.
+    #
+    # Default follows DEFAULT_TURN_WAIT_FOR_TRANSCRIPT (False) so it matches the
+    # intent already recorded for the other path, and the key is the same one,
+    # so an agent configured for one path behaves the same on the other.
     timer = SpeechTimeoutUserTurnStopStrategy(
         user_speech_timeout=float(run_configs.get(
             "dograh_speech_timeout_secs", DEFAULT_DOGRAH_SPEECH_TIMEOUT_SECS)),
+        wait_for_transcript=bool(run_configs.get(
+            "turn_wait_for_transcript", DEFAULT_TURN_WAIT_FOR_TRANSCRIPT)),
     )
 
     if not run_configs.get("telugu_turn_assist",
