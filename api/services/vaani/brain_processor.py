@@ -165,6 +165,25 @@ class StateInjector(FrameProcessor):
         )
 
 
+def _end_is_earned(state) -> bool:
+    """Does this call have a reason to be over? See `_note_mode` for run 880.
+
+    Deliberately generous -- every genuine ending is on this list, so the guard
+    only ever catches the case nothing else explains. Being wrong in this
+    direction costs one more turn of conversation; being wrong in the other
+    direction hangs up on a customer.
+    """
+    return bool(
+        getattr(state, "must_end", False)          # state or triage decided
+        or getattr(state, "disqualified", False)
+        or getattr(state, "refusals", 0)           # he said no
+        or getattr(state, "no_more_questions", False)
+        or getattr(state, "next_step_agreed", False)
+        or getattr(state, "appointment_iso", "")   # the business is done
+        or not getattr(state, "still_need", [])    # nothing left to ask
+    )
+
+
 class ReplyFilter(FrameProcessor):
     """Sanitises the reply and enforces the hard rules before TTS."""
 
@@ -486,9 +505,43 @@ class ReplyFilter(FrameProcessor):
         return False
 
     def _note_mode(self) -> None:
-        """`MODE: END` is how the agent hangs up. Text chat has nothing to hang up."""
-        if self._injector and self._sanitizer.mode == "END":
-            self._injector.state.must_end = True
+        """`MODE: END` is how the agent hangs up -- if the call has earned it.
+
+        Run 880. Six fields unasked, nothing refused, and the caller had just
+        said he WAS interested:
+
+            USER: we ARE interested in solar, but right now I don't know much
+                  about it. Hello?
+            BOT : no problem, call us whenever you like. Thank you.
+                                                    *** hung up at 32s ***
+
+        That is a man asking to be told about solar, which is the easiest lead
+        on the list. Nothing deterministic did it -- every triage pattern was
+        run against that exact sentence afterwards and not one matches. The
+        model emitted `MODE: END` and this method set `must_end`, because
+        nothing ever asked whether ending was earned. The same close appears in
+        runs 866 and 876, so it is not new; it had never been looked at.
+
+        Hanging up is a business action and the model does not own those: it
+        owns language, the application owns truth. A wrong word costs a
+        sentence; a wrong hangup costs the lead and the call is not coming back.
+
+        So END is a REQUEST now. It is granted when the call has a reason to be
+        over and ignored otherwise. The escape hatch is already there and does
+        not need adding: say goodbye twice and `render()` sets `must_end`
+        itself (run 803's rule), so an agent that really is finished still gets
+        out on the next turn.
+        """
+        if not (self._injector and self._sanitizer.mode == "END"):
+            return
+        state = self._injector.state
+        if _end_is_earned(state):
+            state.must_end = True
+            return
+        logger.warning(
+            "[end-call] MODE: END refused -- nothing refused, nothing "
+            f"disqualified, and {len(state.still_need)} field(s) still unasked. "
+            "Run 880 hung up on an interested caller here.")
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
