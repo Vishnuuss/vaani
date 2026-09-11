@@ -399,6 +399,42 @@ class ReplyFilter(FrameProcessor):
                 self._injector.state.misheard_last_turn = True
             return guardrails.REPAIR_LINE
 
+        # A field already written down must never be asked again.
+        #
+        # Run 891: property type answered on turn 3, the bill confirmed back to
+        # him on turn 4, and then property, bill, property asked across turns
+        # 5, 6 and 7. Run 890, three turns after answering: "చెప్పాను కదా
+        # కమర్షియల్ అని ఫస్ట్ లోనే చెప్పాను కదా" -- I told you commercial, I
+        # said it right at the start.
+        #
+        # Neither existing guard covers this. `MAX_ASKS_PER_FIELD` counts asks,
+        # and two is a legal budget -- for a field we have NOT got; it has
+        # nothing to say about one already in `known`. `_is_repeat` compares
+        # WORDING, and these re-asks are not always worded alike. Same lesson as
+        # the ask budget: a guard on wording cannot catch a repeat of subject.
+        #
+        # Subject is read with `field_asked_in`, the matcher the ask budget
+        # already uses, so there is nothing new to keep in step. Guarded by
+        # `not self._spoken` like every other substitution here: once audio is
+        # out, cutting the sentence in half is run 783's "అర్థమైంది బిల్లు?",
+        # which is worse than the repeat.
+        # getattr, not attribute access: several suites build the injector and
+        # its state as doubles, and a double without this method must mean "do
+        # not enforce" rather than an AttributeError on a live call. Run 213
+        # shipped exactly that mistake from exactly this file.
+        if not self._spoken and self._injector is not None:
+            state = self._injector.state
+            subject_of = getattr(state, "field_asked_in", None)
+            asked_about = subject_of(candidate) if callable(subject_of) else ""
+            if asked_about and asked_about in getattr(state, "known", {}):
+                self._blocked = True
+                logger.warning(
+                    f"[answered] {asked_about} is already known "
+                    f"({state.known.get(asked_about)!r}); not asking it again: "
+                    f"{candidate[:60]!r}")
+                state.misheard_last_turn = True
+                return guardrails.REPAIR_LINE
+
         # The model writing its OWN "I could not hear you" counts exactly like
         # the guard writing one: whatever comes back next is an answer to a
         # question we have already failed to understand once. Run 314 apologised
