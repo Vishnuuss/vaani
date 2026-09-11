@@ -82,7 +82,7 @@ def _strip_ack(text: str) -> str:
 def _normalise(text: str) -> str:
     """Punctuation and spacing are not what makes two replies different."""
     return re.sub(r"[^\wఀ-౿]+", "", (text or "").lower())
-from api.services.vaani.state import CallState, echoes_agent
+from api.services.vaani.state import CallState, _is_question, echoes_agent
 
 
 class StateInjector(FrameProcessor):
@@ -176,9 +176,22 @@ def _end_is_earned(state) -> bool:
     direction costs one more turn of conversation; being wrong in the other
     direction hangs up on a customer.
     """
+    if getattr(state, "must_end", False):
+        return True                                # he asked to hang up
+
+    # He asked us something on this very turn. Run 882: "మీరు ఎక్కడి నుంచి?" --
+    # where are you calling from -- answered with "call us whenever you like,
+    # thank you", and the call was over. Run 880's guard did not catch it,
+    # because by then he had agreed to the visit and `next_step_agreed` made
+    # the ending "earned" while he was mid-question.
+    #
+    # Agreeing to a site survey is not agreeing to stop talking. A question on
+    # the line is a caller still engaged.
+    if _is_question(getattr(state, "last_user_text", "") or ""):
+        return False
+
     return bool(
-        getattr(state, "must_end", False)          # state or triage decided
-        or getattr(state, "disqualified", False)
+        getattr(state, "disqualified", False)
         or getattr(state, "refusals", 0)           # he said no
         or getattr(state, "no_more_questions", False)
         or getattr(state, "next_step_agreed", False)
