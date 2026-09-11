@@ -167,8 +167,24 @@ class Amount:
         An implausible figure is not discarded -- the caller did say it, and it
         may be a mishearing worth checking. It is simply never recorded as fact
         and never reacted to as though it were.
+
+        A RANGE is judged on its LOW end, not on its midpoint.
+
+        Runs 864 and 868: a factory said "50 to 60 lakhs", the midpoint 55L
+        cleared the 50L ceiling by ten percent, and the agent told him that
+        cannot be a monthly bill and asked what it "really" is. He said "that IS
+        really it" and hung up. Three of five MB Solar callers that day were
+        commercial sites quoting 50-80 lakhs -- the largest leads this business
+        gets.
+
+        The midpoint is a number nobody said. The low end is the conservative
+        reading of what he DID say, and if that reading is credible then so is
+        he. A range with no credible reading at all -- "50 to 60 crores" -- is
+        still doubted, and a single implausible figure is untouched by this, so
+        run 312's "రెండు కోట్లు" is still caught.
         """
-        return MIN_PLAUSIBLE <= self.rupees <= MAX_PLAUSIBLE
+        value = self.low if self.is_range else self.rupees
+        return MIN_PLAUSIBLE <= value <= MAX_PLAUSIBLE
 
     @property
     def is_range(self) -> bool:

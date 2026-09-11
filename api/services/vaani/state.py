@@ -200,12 +200,16 @@ class CallState:
     # Counting the FIELD instead of comparing the words does not care how it is
     # phrased. Two attempts is the whole budget: one ask, one clarification.
     MAX_ASKS_PER_FIELD = 2
+    # How many times the CALLER may answer a field before it is retired,
+    # whether or not we ever understood him. See `answer_counts`.
+    MAX_ANSWERS_PER_FIELD = 2
 
     @property
     def still_need(self) -> list[str]:
         return [f for f in self.required_fields
                 if f not in self.known
                 and f not in self.answered_pending
+                and self.answer_counts.get(f, 0) < self.MAX_ANSWERS_PER_FIELD
                 and self.ask_counts.get(f, 0) < self.MAX_ASKS_PER_FIELD]
 
     @property
@@ -430,6 +434,28 @@ class CallState:
         self.rebooked = booking.Slot(when)
         return True
 
+    def variants_for(self, field_name: str) -> list[str]:
+        """The written ways this question may be re-asked. Never invented.
+
+        Supplied per client, alongside the question itself, because the wording
+        of a spoken Telugu question is Layer 3 work -- researched for the
+        business -- and nothing industry-neutral belongs in this file. MB
+        Solar's phrasing is not HDFC's.
+
+        When a client has written none, this falls back to the question itself,
+        which is the safe end of the trade: a human-written sentence said twice
+        is a smaller failure than an invented one nobody speaks. It is also
+        bounded now -- `MAX_ANSWERS_PER_FIELD` means the caller hears a given
+        question at most twice -- so this cannot become run 817, where the same
+        sentence was recited three times while he asked to be heard.
+        """
+        written = [v for v in (self.question_variants.get(field_name) or [])
+                   if (v or "").strip()]
+        if written:
+            return written
+        own = (self.questions.get(field_name) or "").strip()
+        return [own] if own else []
+
     def commit_ask(self) -> None:
         """Spend one ask, at the moment the agent actually says it.
 
@@ -516,7 +542,8 @@ class CallState:
     # too, so its repetition failures have been measuring this and not the
     # agent.
     PERSISTED = (
-        "known", "ask_counts", "asked", "last_asked", "objections", "turn",
+        "known", "ask_counts", "answer_counts", "heard", "asked", "last_asked",
+        "objections", "turn",
         "disqualified", "disqualify_reason", "misheard_last_turn",
         "next_step_agreed", "buying_signal", "refusals", "no_more_questions",
         "must_end", "end_reason", "appointment_iso", "taken_slots", "reacted",
@@ -590,6 +617,45 @@ class CallState:
     # Deliberately NOT a rule about locations. The same failure asked his name
     # twice and the site survey three times on that one call.
     answered_pending: set = field(default_factory=set)
+    # How many times the CALLER has answered each field, and what he actually
+    # said. Counted on HIS turn, not ours.
+    #
+    # Run 870. Every mechanism in this class counts what WE do -- asks, spent
+    # from a two-ask budget. That budget cannot bound this loop, because every
+    # path that fails to understand him GIVES THE ASK BACK: `_refund_ask` when
+    # he was cut off, and `misheard_last_turn`, which does not merely refund but
+    # instructs the model to "ask the SAME question again". Both are right on
+    # their own terms -- a man who was interrupted has not been asked. But
+    # chained they make the loop unbounded from the only viewpoint that
+    # matters, and run 870 is what that sounds like:
+    #
+    #     bot : are you the owner, or renting?
+    #     user: (garbled by Sarvam)
+    #     bot : sorry, I could not hear you ... are you the owner, or renting?
+    #     user: (garbled again)
+    #     bot : are you the owner, or renting?
+    #     user: నేను ఎన్నిసార్లు చెప్పాలి?          how many times must I say it
+    #     bot : are you the owner, or renting?      <- and again
+    #     user: చెత్త చెత్త మాట్లాడొద్దు కదా.        *** hung up ***
+    #
+    # Reproduced on the LIVE agent (run 873, text-chat probe, 11 Sep): the
+    # deployed code asks it four times, the fourth immediately after he asks how
+    # many times he has to say it.
+    #
+    # So the counter he can actually feel is added: his answers. Two
+    # substantive replies retire the field, whatever we understood. Failing to
+    # extract a value is acceptable and the extractor is allowed to be wrong;
+    # asking a human being the same question a fourth time is not a degraded
+    # answer, it is the thing that ends the call.
+    #
+    # `heard` keeps the raw text of those answers so the lead record shows what
+    # he said rather than a null -- he did answer, twice, and a human reading
+    # the lead later can see it even when Sarvam could not.
+    answer_counts: dict = field(default_factory=dict)
+    heard: dict = field(default_factory=dict)
+    # Per-field written re-ask wordings, supplied by the client's workflow.
+    # Empty is normal and safe -- see `variants_for`.
+    question_variants: dict = field(default_factory=dict)
     # How many times each field has been GIVEN BACK after the caller was cut
     # off or said he had not answered. Bounded in triage, because a refund the
     # caller can trigger at will is not a budget.
@@ -684,6 +750,11 @@ class CallState:
             # the answer-first rule will bring it back after we have replied.
             return
         self.answered_pending.add(field_asked)
+        # He answered. Counted whether or not anything was understood -- see
+        # `answer_counts` for why this is the only counter he can feel.
+        self.answer_counts[field_asked] = (
+            self.answer_counts.get(field_asked, 0) + 1)
+        self.heard.setdefault(field_asked, []).append(said)
 
     def advance(self) -> None:
         """Move the phase forward based on what we actually know.
@@ -969,14 +1040,46 @@ class CallState:
                 # about location instead -- the exact skipping being fixed. The
                 # FIELD is now named in capitals and made non-negotiable; only
                 # the phrasing is free.
+                # CHANGED 11 Sep. The clause that used to end this line --
+                # "if you have asked before, ask it a DIFFERENT way" -- is the
+                # source of the bookish Telugu, and doc 34 measured it without
+                # being able to name it: the FIRST ask is 90-100% identical to
+                # the written question, and every re-ask drifts, always toward
+                # the written register (77% -> 69% -> 62% on run 859's
+                # location question, and the 62% version is the one that says
+                # "నివసిస్తున్నారు").
+                #
+                # Of the ten worst bookish forms in that audit, EIGHT appear in
+                # no prompt layer at all. The model invents them -- because
+                # this line tells it to invent, and invented Telugu defaults to
+                # the register the model read most of in training, which is
+                # written Telugu. `speech_register` cannot catch them either:
+                # it substitutes ~55 nouns and deliberately excludes verb
+                # morphology, and every one of those forms is a verb.
+                #
+                # The tension is real and both halves are paid for. "IN THESE
+                # EXACT WORDS" fixed run 336's dropped options and produced run
+                # 817's "it is 100% scripted". Free rewording fixed the
+                # recitation and produced this. Neither end of that dial is
+                # right, so the dial is the wrong control: a re-ask now picks
+                # from a SHORT WRITTEN LIST of spoken variants instead of
+                # inventing one. Varied, so it does not recite; written by a
+                # human, so it cannot drift into Telugu no caller speaks.
+                variants = self.variants_for(nxt)
+                if self.ask_counts.get(nxt, 0) >= 1 and variants:
+                    offered = " / ".join(f'"{v}"' for v in variants)
+                    how = ("You have asked this before, so do NOT invent new "
+                           "wording for it -- say ONE of these, whichever "
+                           f"follows best from what they just said: {offered}")
+                else:
+                    how = ("The WORDING is yours: make it follow from what "
+                           "they just said.")
                 lines.append(
                     f"ASK THEM ABOUT {nxt.upper()} AND NOTHING ELSE. The "
                     f'question to cover is: "{self.questions[nxt]}". You MUST '
                     "stay on that subject even if they dodged it -- moving to a "
                     "different question is the single thing this caller "
-                    "complains about most. Keep every option it names. The "
-                    "WORDING is yours: make it follow from what they just said, "
-                    "and if you have asked before, ask it a DIFFERENT way.")
+                    "complains about most. Keep every option it names. " + how)
                 self.pending_ask = nxt
                 # The client's complaint, in one word: "no confirmations". The
                 # reference agent opens nearly every turn with a two-word
