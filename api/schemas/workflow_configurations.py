@@ -190,6 +190,33 @@ DEFAULT_TURN_START_STRATEGY = "default"
 DEFAULT_TURN_START_MIN_WORDS = 3
 DEFAULT_PROVISIONAL_VAD_PAUSE_SECS = 1.5
 DEFAULT_TURN_STOP_STRATEGY = "turn_analyzer"  # semantic, in-process, no network hop
+
+# How long Dograh's own strategy waits after the caller stops speaking.
+#
+# This is pipecat's `user_speech_timeout`, and until 11 Sep the strategy was
+# built with NO arguments, so it took the library's 0.6s and nothing in this
+# file could reach it. With Silero's stop_secs=0.2 on top that is a hard 0.8s
+# before the LLM is asked anything -- and it is what the four live agents
+# actually run, since every one of them is set to "transcription".
+#
+# Measured 11 Sep across all four: 0 of 69 turns came in under 0.6s, minimum
+# 0.831s. That is the floor, and this is the only dial that moves it. 0.6 is
+# pipecat's own default, so nothing changes until someone sets it.
+DEFAULT_DOGRAH_SPEECH_TIMEOUT_SECS = 0.6
+
+# Run the Telugu model ALONGSIDE Dograh's timer rather than instead of it.
+#
+# The controller ends a turn on whichever strategy fires first, so the timer
+# stays the backstop and the model can only end a turn EARLIER. That trade is
+# one-sided and is worth stating plainly: when the model is right the agent is
+# faster, and when it is wrong it talks over the caller. It cannot reduce
+# cut-offs -- two detectors do not check each other, the eager one wins.
+#
+# The custom Telugu detector was tried as a REPLACEMENT and judged worse than
+# Dograh's on 10 Sep, which is why these agents run "transcription" at all.
+# This is a different arrangement, not a reversal of that finding, and it stays
+# off until it has been measured on a real call.
+DEFAULT_TELUGU_TURN_ASSIST = False
 # False = the semantic turn detector ends the turn; the transcript is
 # bookkeeping and leaves the latency critical path (~438 ms/turn).
 DEFAULT_TURN_WAIT_FOR_TRANSCRIPT = False
@@ -560,6 +587,8 @@ class WorkflowConfigurationDefaults(BaseModel):
         DEFAULT_TURN_STOP_STRATEGY
     )
     turn_wait_for_transcript: bool = DEFAULT_TURN_WAIT_FOR_TRANSCRIPT
+    dograh_speech_timeout_secs: float = DEFAULT_DOGRAH_SPEECH_TIMEOUT_SECS
+    telugu_turn_assist: bool = DEFAULT_TELUGU_TURN_ASSIST
     speculation_enabled: bool = DEFAULT_SPECULATION_ENABLED
     llm_hedge: int = Field(default=DEFAULT_LLM_HEDGE, ge=1, le=3)
     tts_token_streaming: bool = DEFAULT_TTS_TOKEN_STREAMING
