@@ -36,6 +36,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    TranscriptionFrame,
     UserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
@@ -82,6 +83,11 @@ async def test_he_starts_speaking_mid_generation_and_hears_nothing_of_it():
     rf = _filter()
     await _send(rf, LLMFullResponseStartFrame())   # he is silent: not stale
     await _send(rf, UserStartedSpeakingFrame())    # he takes the floor
+    # And he really says something. Bare VAD is deliberately NOT enough -- it
+    # fires on echo and noise, and a reply dropped on that evidence is never
+    # retried, which is the dead air of runs 881 and 882. Run 865's caller did
+    # speak, twice, so the transcription is what actually happened.
+    await _send(rf, TranscriptionFrame("స్టూడెంట్ నేను.", "user", "t0"))
     await _send(rf, LLMTextFrame("సరే, మీది సొంత ఇల్లా, అపార్ట్‌మెంటా?"))
     await _send(rf, LLMFullResponseEndFrame())
     assert "".join(rf.spoken_out) == "", (
@@ -98,6 +104,7 @@ async def test_the_held_back_text_is_not_flushed_over_him_either():
     await _send(rf, LLMTextFrame("సరే"))
     assert "".join(rf.spoken_out) == "", "precondition: still held back"
     await _send(rf, UserStartedSpeakingFrame())
+    await _send(rf, TranscriptionFrame("స్టూడెంట్ నేను.", "user", "t0"))
     await _send(rf, LLMFullResponseEndFrame())
     assert "".join(rf.spoken_out) == "", (
         "the end-frame flush pushes held text straight to TTS without asking "

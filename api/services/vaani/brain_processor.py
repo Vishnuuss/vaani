@@ -549,6 +549,35 @@ class ReplyFilter(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
+        # A reply is abandoned only on EVIDENCE that he really spoke.
+        #
+        # This was keyed on `UserStartedSpeakingFrame` when it shipped, and bare
+        # VAD fires without the caller saying anything new. Run 881 shows the
+        # worst case in the transcript itself: the agent's own greeting came
+        # back as USER text, word for word, off a speakerphone. `echoes_agent`
+        # drops echoed TEXT before triage, but nothing drops the VAD event that
+        # arrives with it -- so the agent's own voice silenced its own reply.
+        #
+        # And a dropped reply is never retried. Nothing regenerates, because a
+        # new reply needs a new TURN and bare VAD does not complete one, so the
+        # caller sits in silence until he speaks again. That is the "హలో" in
+        # runs 881 and 882, and it is a worse failure than the overlap this
+        # rule exists to prevent.
+        #
+        # A real transcription is self-healing: the same words that abandon this
+        # reply are the ones that start the next turn, so the replacement is
+        # already on its way before the caller notices.
+        if isinstance(frame, TranscriptionFrame):
+            heard = (frame.text or "").strip()
+            state = self._injector.state if self._injector else None
+            if (heard and self._generating and not self._spoken.strip()
+                    and not (state is not None
+                             and echoes_agent(heard, state.asked))):
+                self._stale = True
+                logger.warning(
+                    "[turn] the caller spoke while this reply was being built; "
+                    "dropping what had not been spoken yet")
+
         if isinstance(frame, UserStartedSpeakingFrame):
             self._user_speaking = True
             # He has taken the floor while a reply is still being generated.
@@ -563,15 +592,17 @@ class ReplyFilter(FrameProcessor):
             #     BOT : మీరు ఇంకా ఇక్కడ
             #           సరే, మీది సొంత ఇల్లా, అపార్ట్‌మెంటా...
             #
-            # Only while NOTHING has been spoken yet. Once audio is out the
-            # reply must finish: cutting a sentence in half is run 783's
-            # truncation ("అర్థమైంది బిల్లు?"), which is a worse thing to do to
-            # a caller than answering him a beat late. That window exists at
-            # all because the sanitizer holds back 24 characters.
-            if self._generating and not self._spoken.strip():
-                self._stale = True
-                logger.warning("[turn] the caller took the floor mid-reply; "
-                               "dropping what had not been spoken yet")
+            # Deliberately NOT decided here any more -- see the
+            # TranscriptionFrame branch above. Bare VAD fires on echo and on
+            # noise, and a reply dropped on that evidence is never retried,
+            # which is dead air (runs 881, 882).
+            #
+            # The rule it enforces is unchanged and still matters: only while
+            # NOTHING has been spoken yet. Once audio is out the reply must
+            # finish, because cutting a sentence in half is run 783's
+            # truncation ("అర్థమైంది బిల్లు?") -- a worse thing to do to a
+            # caller than answering him a beat late. That window exists at all
+            # because the sanitizer holds back 24 characters.
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._user_speaking = False
 
