@@ -68,6 +68,7 @@ from pipecat.turns.user_stop.llm_turn_completion_user_turn_stop_strategy import 
 )
 from pipecat.turns.user_turn_completion_mixin import UserTurnCompletionConfig
 from api.services.vaani.compiler import MODE_PROTOCOL
+from api.services.vaani.filler_turns import apply_filler_guard
 from api.services.vaani.turn_completion import compose_instructions
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.turns.user_start import (
@@ -163,10 +164,29 @@ def create_user_turn_start_strategies(
 def create_user_turn_stop_strategies(
     run_configs: dict, *, uses_external_turns: bool
 ):
-    """When is the caller judged to have FINISHED. The expensive decision."""
+    """When is the caller judged to have FINISHED. The expensive decision.
+
+    The filler guard is applied HERE, around every branch below, rather than
+    inside one of them. That placement is the whole point of it: the knowledge
+    that "ఆ" is a thinking noise lived only in the `turn_analyzer` branch, so
+    switching to `transcription` -- pipecat's fixed-timeout strategy, which is
+    what runs after the detector comparison on 10 Sep -- silently dropped it,
+    and five of run 863's twenty turns became replies to a single syllable.
+    Wrapping the result covers whichever detector is configured, now and later.
+
+    External turns are deliberately NOT wrapped: another system owns turn
+    boundaries there and second-guessing it from inside would be a bug.
+    """
 
     if uses_external_turns:
         return [ExternalUserTurnStopStrategy()]
+
+    return apply_filler_guard(
+        _build_user_turn_stop_strategies(run_configs), run_configs)
+
+
+def _build_user_turn_stop_strategies(run_configs: dict):
+    """The detector itself, unwrapped. See the caller for why the split."""
 
     # The default MUST be supplied here. A bare .get() returned None for any
     # agent whose workflow_configurations is {} -- which is every agent created

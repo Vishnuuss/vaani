@@ -1,0 +1,298 @@
+"""A thinking noise is not a turn. Wait for the sentence behind it.
+
+The defect, measured on run 863
+-------------------------------
+The caller was asked for his electricity bill and said, over five seconds:
+
+    17:21:16  "ఆ"                 -> a full LLM reply was generated
+    17:21:19  "ఉ"                 -> a second full LLM reply was generated
+    17:21:20  BOT  which property type?
+    17:21:21  BOT  what is your monthly bill?
+
+Two single syllables -- pure hesitation, the sound of a man reaching for a
+number -- each became a finished user turn, each triggered a generation, and
+both replies were spoken 1.3 s apart. **Five of that call's twenty user turns
+were bare fillers.** It is the largest single source of the agent answering
+things nobody said, and of it appearing to talk over itself.
+
+Why the existing guard does not cover this
+-------------------------------------------
+`completeness.sounds_unfinished()` already knows "ఆ" is not a sentence, and
+`TeluguTurnAnalyzer` consults it. But that lives inside the `turn_analyzer`
+branch of `create_user_turn_stop_strategies`. On `turn_stop_strategy =
+"transcription"` -- pipecat's `SpeechTimeoutUserTurnStopStrategy`, which is
+what the client asked to run after comparing the two detectors -- the analyzer
+is never constructed, so the filler knowledge is simply absent. The strategy
+waits its timeout, sees *a* transcript, and finalises the turn.
+
+So the knowledge has to sit somewhere both paths reach. This wraps whichever
+stop strategy is configured, exactly as `BargeInGatedUserTurnStartStrategy`
+wraps whichever start strategy is configured, and for the same reason: the
+decision belongs next to the rest of Vaani's turn-taking, and pipecat stays
+unedited.
+
+Deferring, not discarding -- and why that distinction is load-bearing
+----------------------------------------------------------------------
+Run 314's lesson stands: a bare "um" IS a real answer to "is anyone there?",
+and an empty name is worse than a wrong one. So a filler turn is never thrown
+away. It is held for `defer_secs` to see whether the sentence it was
+introducing arrives.
+
+If it does, the caller gets one reply to what he actually meant.
+If it does not, the turn is released unchanged and the agent answers the
+filler -- today's behaviour, just later.
+
+The deferral is bounded twice over, because a guard that can strand a caller in
+silence is worse than the bug it fixes:
+
+  * `defer_secs` -- a watchdog fires the turn end even if nothing else is ever
+    heard. Nothing depends on the caller speaking again.
+  * `max_defers` -- a caller who says "ఆ ... ఆ ... ఆ" cannot be deferred
+    indefinitely; after this many holds in one turn the next one goes straight
+    through.
+
+Off by default. `filler_turn_guard_enabled` is False and `apply_filler_guard`
+then returns the caller's list unchanged -- the same objects, not copies.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from loguru import logger
+
+from api.schemas.workflow_configurations import (
+    DEFAULT_FILLER_TURN_DEFER_SECS,
+    DEFAULT_FILLER_TURN_GUARD_ENABLED,
+    DEFAULT_FILLER_TURN_MAX_DEFERS,
+)
+from api.services.vaani import completeness
+from pipecat.frames.frames import (
+    Frame,
+    InterimTranscriptionFrame,
+    TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+)
+from pipecat.turns.types import ProcessFrameResult
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import (
+    BaseUserTurnStopStrategy,
+    UserTurnStoppedParams,
+)
+
+
+def is_only_filler(text: str) -> bool:
+    """True when the whole utterance is hesitation and nothing else.
+
+    Kept for logging and for tests that want the narrow case by name. The
+    HOLD decision uses `should_hold` below, which is broader.
+
+    `strip_fillers` is deliberately not used. It returns the original string
+    when stripping would empty it (run 314), which is right for storing a value
+    and exactly wrong for asking "was that anything at all".
+    """
+    said = (text or "").strip()
+    if not said:
+        return False
+    tokens = [t.strip(completeness._PUNCT).lower() for t in said.split()]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return False
+    # Two syllables of hesitation is still hesitation ("ఆ ఆ", "um uh"); a third
+    # word means he is saying something, whatever it sounds like.
+    if len(tokens) > 2:
+        return False
+    return all(t in completeness.HESITATIONS for t in tokens)
+
+
+def should_hold(text: str) -> bool:
+    """True when the sentence cannot end where it stands, so wait for the rest.
+
+    This is `completeness.sounds_unfinished` and nothing else, on purpose. A
+    second copy of "what is an unfinished Telugu sentence" is a second thing to
+    drift, and that drift is precisely the failure this module exists to fix:
+    the knowledge was already in the codebase, correct and tested, and merely
+    out of reach on the `transcription` code path.
+
+    Checked against every caller turn in run 863. It holds all four that should
+    have been held -- "ఆ", "ఉ", "ఒక", and the dangling quantity "అరవై" whose
+    unit had not been said yet (the run-295 lineage that once stored a monthly
+    bill of 15) -- and releases every real answer, including the ones a cruder
+    rule gets wrong:
+
+        "ఆ ఉంది"            -> release. "ఆ" leads, but he answered.
+        "ఉన్నాము ఉన్నాము"    -> release. Repetition is emphasis, not hesitation.
+        "చెప్పండి"          -> release. An instruction, not a noise.
+        "సొంతమే"            -> release. The answer to a question.
+
+    An empty transcript is NOT held. No text at all is the STT having nothing
+    to say, which is a different condition from the caller trailing off, and
+    holding on it would delay every turn the transcript is merely late for.
+    """
+    if not (text or "").strip():
+        return False
+    return completeness.sounds_unfinished(text)
+
+
+class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
+    """Wraps a stop strategy and holds back turns that are only a filler.
+
+    Forwards every frame to the inner strategy untouched, so the inner
+    strategy's own detection is unchanged. Only the moment of
+    `on_user_turn_stopped` moves, and only when the transcript for the turn is
+    nothing but hesitation.
+    """
+
+    def __init__(self, inner: BaseUserTurnStopStrategy, *,
+                 defer_secs: float = 1.2, max_defers: int = 2, **kwargs):
+        super().__init__(**kwargs)
+        self._inner = inner
+        self._defer_secs = max(0.0, float(defer_secs))
+        self._max_defers = max(0, int(max_defers))
+
+        self._text = ""
+        self._defers = 0
+        self._timer: asyncio.Task | None = None
+
+        inner.add_event_handler("on_push_frame", self._on_inner_push_frame)
+        inner.add_event_handler("on_user_turn_stopped", self._on_inner_stopped)
+        # Relay the rest, but only the ones this particular strategy declares.
+        # `BaseObject.add_event_handler` LOGS a warning and carries on for an
+        # unregistered event rather than raising, so a blanket try/except
+        # catches nothing and every call would start with warning noise that
+        # looks like a fault. Which events exist differs by strategy --
+        # SpeechTimeout has no `on_reset_aggregation`, TurnAnalyzer does.
+        declared = set(getattr(inner, "_event_handlers", {}) or {})
+        for event in ("on_user_turn_inference_triggered",
+                      "on_broadcast_frame", "on_reset_aggregation"):
+            if event in declared:
+                inner.add_event_handler(event, self._relay(event))
+
+    # --- plumbing ---------------------------------------------------------
+
+    @property
+    def inner(self) -> BaseUserTurnStopStrategy:
+        """Named to match `DeferredUserTurnStopStrategy`, which
+        `turn_taking.analyzer_from` already walks looking for an analyzer."""
+        return self._inner
+
+    def __str__(self) -> str:
+        return f"FillerAware({self._inner})"
+
+    def _relay(self, event: str):
+        async def handler(_strategy, *args, **kwargs):
+            await self._call_event_handler(event, *args, **kwargs)
+        return handler
+
+    async def _on_inner_push_frame(self, _strategy, frame, direction=None):
+        if direction is None:
+            await self.push_frame(frame)
+        else:
+            await self.push_frame(frame, direction)
+
+    async def setup(self, task_manager):
+        await super().setup(task_manager)
+        await self._inner.setup(task_manager)
+
+    async def cleanup(self):
+        self._cancel_timer()
+        await super().cleanup()
+        await self._inner.cleanup()
+
+    async def process_frame(self, frame: Frame) -> ProcessFrameResult:
+        self._observe(frame)
+        result = await self._inner.process_frame(frame)
+        return ProcessFrameResult.CONTINUE if result is None else result
+
+    def _observe(self, frame: Frame) -> None:
+        if isinstance(frame, TranscriptionFrame):
+            # Accumulate: Sarvam splits one utterance across finals, which is
+            # the very thing that turns "ఒక ... డెబ్బై" into two turns.
+            self._text = f"{self._text} {frame.text}".strip()
+        elif isinstance(frame, InterimTranscriptionFrame):
+            if frame.text and frame.text.strip():
+                self._text = f"{self._text} {frame.text}".strip()
+        elif isinstance(frame, (UserStartedSpeakingFrame,
+                                VADUserStartedSpeakingFrame)):
+            # New speech within a deferral is exactly what we were waiting
+            # for; let the inner strategy decide the turn afresh.
+            self._cancel_timer()
+
+    # --- the decision -----------------------------------------------------
+
+    async def _on_inner_stopped(self, _strategy, params: UserTurnStoppedParams):
+        text = self._text
+        if (self._defer_secs <= 0
+                or self._defers >= self._max_defers
+                or not should_hold(text)):
+            await self._release(params)
+            return
+
+        self._defers += 1
+        why = "a filler" if is_only_filler(text) else "unfinished"
+        logger.info(
+            f"[filler] holding {why} turn {text!r} for {self._defer_secs:.2f}s "
+            f"(hold {self._defers}/{self._max_defers}); waiting for the rest")
+        self._cancel_timer()
+        self._timer = asyncio.create_task(self._release_later(params))
+
+    async def _release_later(self, params: UserTurnStoppedParams) -> None:
+        """The watchdog. Nothing here depends on the caller speaking again.
+
+        Without this a caller whose entire answer is "ఆ" -- which run 314 shows
+        is sometimes a real answer -- would be met with silence until the idle
+        timeout. Deferring must never become discarding.
+        """
+        try:
+            await asyncio.sleep(self._defer_secs)
+        except asyncio.CancelledError:
+            return
+        logger.info("[filler] nothing followed; releasing the filler turn")
+        await self._release(params)
+
+    async def _release(self, params: UserTurnStoppedParams) -> None:
+        self._cancel_timer()
+        self._text = ""
+        self._defers = 0
+        await self._call_event_handler("on_user_turn_stopped", params)
+
+    def _cancel_timer(self) -> None:
+        if self._timer is not None and not self._timer.done():
+            self._timer.cancel()
+        self._timer = None
+
+    async def handle_user_turn_started(self):
+        self._cancel_timer()
+        self._text = ""
+        self._defers = 0
+        handler = getattr(self._inner, "handle_user_turn_started", None)
+        if handler is not None:
+            await handler()
+
+
+def apply_filler_guard(strategies, run_configs: dict):
+    """Wrap the stop strategies in the filler guard, or return them untouched.
+
+    Disabled -- the default -- returns the SAME list object with the SAME
+    strategy instances. Nothing is constructed, so there is no code path by
+    which it can change behaviour.
+    """
+    if not run_configs.get("filler_turn_guard_enabled",
+                           DEFAULT_FILLER_TURN_GUARD_ENABLED):
+        return strategies
+    if not strategies:
+        return strategies
+
+    defer = float(run_configs.get("filler_turn_defer_secs",
+                                  DEFAULT_FILLER_TURN_DEFER_SECS))
+    max_defers = int(run_configs.get("filler_turn_max_defers",
+                                     DEFAULT_FILLER_TURN_MAX_DEFERS))
+    logger.info(f"[filler] turn guard ENABLED defer={defer}s "
+                f"max_defers={max_defers}")
+    # Only the LAST strategy emits `on_user_turn_stopped` in the two-strategy
+    # semantic arrangement; wrapping that one is what matters, and wrapping a
+    # single-element list is the ordinary case.
+    return strategies[:-1] + [
+        FillerAwareUserTurnStopStrategy(strategies[-1], defer_secs=defer,
+                                        max_defers=max_defers)
+    ]

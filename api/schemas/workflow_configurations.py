@@ -388,6 +388,36 @@ DEFAULT_BARGE_IN_MAX_BACKCHANNEL_WORDS = 2
 # this is a bonus signal, not the mechanism.
 DEFAULT_BARGE_IN_LEXICAL = True
 
+# --- A thinking noise is not a turn -----------------------------------------
+#
+# Measured on run 863: five of the caller's twenty turns were a single
+# hesitation syllable -- "ఆ", "ఉ", "ఒక" -- and each one became a finished user
+# turn that generated a full LLM reply. Two of those replies landed 1.3s apart
+# and the caller heard the agent apparently talk over itself.
+#
+# `completeness.sounds_unfinished()` already knows "ఆ" is not a sentence, but it
+# is consulted only inside the `turn_analyzer` branch. On
+# `turn_stop_strategy = "transcription"` -- pipecat's SpeechTimeoutUserTurnStop-
+# Strategy, which is what runs after the detector comparison on 10 Sep -- the
+# analyzer is never built, so that knowledge is simply absent from the path.
+# `vaani/filler_turns.py` puts it back by wrapping whichever strategy is
+# configured, so it covers BOTH detectors.
+#
+# OFF by default: with this False `apply_filler_guard` returns the caller's list
+# unchanged -- the same objects, not copies -- so there is no code path by which
+# it can alter behaviour until someone turns it on deliberately.
+DEFAULT_FILLER_TURN_GUARD_ENABLED = False
+# How long a filler-only turn is HELD to see whether the sentence it was
+# introducing arrives. Deferring, never discarding: run 314 established that a
+# bare "um" IS a real answer to "is anyone there?", so a watchdog releases the
+# turn after this long even if nothing further is ever heard. Nothing depends on
+# the caller speaking again.
+DEFAULT_FILLER_TURN_DEFER_SECS = 1.2
+# A caller who says "ఆ ... ఆ ... ఆ" cannot be held for ever. After this many
+# holds inside one turn the next one goes straight through. A guard that can
+# strand somebody in silence is worse than the defect it fixes.
+DEFAULT_FILLER_TURN_MAX_DEFERS = 2
+
 # BACK ON, after the design was corrected. Read the history before changing it.
 #
 # It was switched off the night it shipped, on this evidence:
@@ -561,6 +591,12 @@ class WorkflowConfigurationDefaults(BaseModel):
     barge_in_max_backchannel_words: int = Field(
         default=DEFAULT_BARGE_IN_MAX_BACKCHANNEL_WORDS, ge=1, le=6)
     barge_in_lexical: bool = DEFAULT_BARGE_IN_LEXICAL
+
+    filler_turn_guard_enabled: bool = DEFAULT_FILLER_TURN_GUARD_ENABLED
+    filler_turn_defer_secs: float = Field(
+        default=DEFAULT_FILLER_TURN_DEFER_SECS, ge=0.0, le=3.0)
+    filler_turn_max_defers: int = Field(
+        default=DEFAULT_FILLER_TURN_MAX_DEFERS, ge=0, le=10)
 
     @field_validator("external_pbx_lead_headers", mode="before")
     @classmethod
