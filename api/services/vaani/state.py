@@ -224,6 +224,8 @@ class CallState:
     buying_signal: bool = False      # caller asked to book, or asked a closing question
     refusals: int = 0                # plain refusals so far; the 2nd ends the call
     no_more_questions: bool = False  # caller explicitly asked to stop being asked
+    # How many times the two slots have been put to him. See `offer_line`.
+    offers_made: int = 0
     # He asked us to answer HIS questions before asking any more of ours.
     # Run 887: "site survey pakkana peḍatārā -- clear my doubts FIRST".
     answer_me_first: bool = False
@@ -244,6 +246,11 @@ class CallState:
     # Counting the FIELD instead of comparing the words does not care how it is
     # phrased. Two attempts is the whole budget: one ask, one clarification.
     MAX_ASKS_PER_FIELD = 2
+    # An OFFER is not an ask and was never bounded by the line above. Run 890
+    # put the same two slots to a caller who had already agreed FIVE times,
+    # until he said "మీరంత కూడా ఆడుకుంటారు సార్" -- you are all just playing
+    # games. One to name the times, one in case he missed them.
+    MAX_OFFERS = 2
     # How many times the CALLER may answer a field before it is retired,
     # whether or not we ever understood him. See `answer_counts`.
     MAX_ANSWERS_PER_FIELD = 2
@@ -411,6 +418,24 @@ class CallState:
         if not self.offered:
             self.offered = booking.offer_slots(taken=self.taken_slots)
         first, second = self.offered
+
+        # Run 890. `MAX_ASKS_PER_FIELD` never bound here because an offer is
+        # not an ask -- and `closing_is_due` deliberately excludes "offering
+        # times" from counting as a close, on the correct grounds that naming
+        # two slots is a question rather than a goodbye. That left the offer
+        # itself with no bound at all, and it went out five times to a caller
+        # who had already said "ఆ తప్పకుండా" (yes, certainly).
+        #
+        # The slots are NOT cleared: he must still be able to choose one. It is
+        # the putting of them to him that stops. An appointment he never chose
+        # is worth less than a lead who was not harassed.
+        if self.offers_made >= self.MAX_OFFERS:
+            return ("You have ALREADY given him both times, twice. Do NOT say "
+                    "them again and do NOT offer any other time. If he names a "
+                    "time, take it. Otherwise tell him warmly that the team "
+                    "will call to fix a convenient slot, thank him by name and "
+                    "END THE CALL.")
+        self.offers_made += 1
         # Two failures this line has actually produced, both on 30 August:
         #
         # Run 322 asked "ఈ రెండు ఎంపికలలో ఏది మీకు బాగుంటుంది?" -- which of these
@@ -1030,6 +1055,13 @@ class CallState:
         # happened, not a standing instruction. The second time round the call
         # simply ends, which is what `must_end` and `EndCallBridge` are for and
         # what nothing was reaching.
+        # Run 890: five identical slot offers. Named here as well as inside
+        # `offer_line`, because a branch that builds its own sentence around
+        # the offer must see the budget too.
+        if self.offers_made >= self.MAX_OFFERS and not self.appointment_iso:
+            lines.append("NOTE: THE TIMES HAVE BEEN OFFERED TWICE ALREADY -- "
+                         "do NOT offer a time again.")
+
         if self.closings_said >= 1 and self.closing_is_due():
             self.must_end = True
             self.end_reason = (
