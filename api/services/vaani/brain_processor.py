@@ -181,6 +181,11 @@ class ReplyFilter(FrameProcessor):
     # every reply.
     _user_speaking = False
     _stale = False
+    # True between LLMFullResponseStartFrame and its End. Class-level, because
+    # several suites build this object with __new__ and an attribute added
+    # without a default took out every turn after the first once already
+    # (run 213, AttributeError).
+    _generating = False
     # Same reasoning as the two above, and the same history: several suites
     # build this object with `__new__` and never run `__init__`, so anything
     # only set there is missing on a live method call. `_said` was added that
@@ -489,6 +494,27 @@ class ReplyFilter(FrameProcessor):
 
         if isinstance(frame, UserStartedSpeakingFrame):
             self._user_speaking = True
+            # He has taken the floor while a reply is still being generated.
+            #
+            # `_stale` was a SNAPSHOT, taken once at LLMFullResponseStartFrame,
+            # of whether he happened to be speaking at that instant. A
+            # generation that starts in silence and is overtaken while it
+            # streams was therefore never marked, and every later chunk passed
+            # the gate. Run 865 is what that sounds like -- two replies in one
+            # breath, the second arriving on top of the first:
+            #
+            #     BOT : మీరు ఇంకా ఇక్కడ
+            #           సరే, మీది సొంత ఇల్లా, అపార్ట్‌మెంటా...
+            #
+            # Only while NOTHING has been spoken yet. Once audio is out the
+            # reply must finish: cutting a sentence in half is run 783's
+            # truncation ("అర్థమైంది బిల్లు?"), which is a worse thing to do to
+            # a caller than answering him a beat late. That window exists at
+            # all because the sanitizer holds back 24 characters.
+            if self._generating and not self._spoken.strip():
+                self._stale = True
+                logger.warning("[turn] the caller took the floor mid-reply; "
+                               "dropping what had not been spoken yet")
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._user_speaking = False
 
@@ -530,6 +556,10 @@ class ReplyFilter(FrameProcessor):
             if self._stale:
                 logger.warning("[turn] a reply started while the caller was "
                                "still speaking; not speaking it")
+            # A generation is in flight from here until the End frame. Read by
+            # the UserStartedSpeakingFrame branch, which can only judge a reply
+            # stale mid-flight if it knows one is being generated.
+            self._generating = True
             self._blocked = False
             await self.push_frame(frame, direction)
             return
@@ -553,6 +583,20 @@ class ReplyFilter(FrameProcessor):
             self._spoken += speakable
 
         if isinstance(frame, LLMFullResponseEndFrame):
+            self._generating = False
+            # Held text is not exempt from the rules the stream obeys.
+            #
+            # The flush below pushes `_pending_repeat` straight to TTS -- it
+            # never passed through `_gate`, which is the one place `_stale` is
+            # consulted. So a reply that was correctly judged stale still spoke
+            # whatever the repeat check happened to be holding, which on a
+            # short reply is the whole of it. Dropped rather than substituted,
+            # for the same reason `_gate` drops: he has not finished, and there
+            # is nothing to apologise for.
+            if self._stale:
+                self._pending_repeat = ""
+                self._sanitizer.finish()
+                return
             # Flush anything held back by the repeat check FIRST.
             #
             # A reply can end while text is still buffered -- a short one is
