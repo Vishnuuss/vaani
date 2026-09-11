@@ -144,7 +144,8 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
     """
 
     def __init__(self, inner: BaseUserTurnStopStrategy, *,
-                 defer_secs: float = 1.2, max_defers: int = 2, **kwargs):
+                 defer_secs: float = 1.2, max_defers: int = 2,
+                 backstop_secs: float | None = None, **kwargs):
         super().__init__(**kwargs)
         self._inner = inner
         self._defer_secs = max(0.0, float(defer_secs))
@@ -153,6 +154,15 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._text = ""
         self._defers = 0
         self._timer: asyncio.Task | None = None
+        # The params of the turn currently being held, so a withdrawal can
+        # leave a watchdog behind instead of nothing. See `_rearm_backstop`.
+        self._held_params = None
+        # Long enough that the inner strategy virtually always wins the race,
+        # short enough that a stranded turn is never the 5.0s backstop plus a
+        # hold. Runs 885 and 887 measured 8.055s and 6.406s of dead air.
+        self._backstop_secs = (max(self._defer_secs, 1.5)
+                               if backstop_secs is None
+                               else max(0.0, float(backstop_secs)))
 
         inner.add_event_handler("on_push_frame", self._on_inner_push_frame)
         inner.add_event_handler("on_user_turn_stopped", self._on_inner_stopped)
@@ -205,35 +215,41 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         return ProcessFrameResult.CONTINUE if result is None else result
 
     def _observe(self, frame: Frame) -> None:
-        # The hold is withdrawn on EVIDENCE that he spoke -- new text -- and
-        # never on a VAD edge alone.
+        # Two jobs, and the second one cost run 888.
         #
-        # It used to be the other way round, and that is where the dead air
-        # came from. Run 887 turn 10 measured a 6.406s endpoint with the
-        # transcript arriving in 0.270s; run 885 turn 3 measured 8.055s. A bare
-        # VAD edge during the hold cancelled this watchdog and handed the
-        # decision back to the inner strategy -- pipecat's speech timeout,
-        # built with `wait_for_transcript=True`. Noise carries no transcript,
-        # so the inner strategy never fired again and the turn sat stranded
-        # until the 5.0s backstop:
+        # ACCUMULATE, because Sarvam splits one utterance across finals -- that
+        # is the whole reason this class exists.
         #
-        #     1.2 + 5.0             = 6.2s   vs 6.406s measured
-        #     1.2 + 1.2 + 5.0 + 0.8 = 8.2s   vs 8.055s measured
+        # WITHDRAW the hold when he speaks again, so the inner strategy decides
+        # the turn afresh on the fuller sentence. That has to key on the VAD
+        # edge: it is the only signal that arrives BEFORE the words, and
+        # withdrawing on the text instead releases the turn the moment a
+        # fragment lands. Run 888 is what that sounds like -- one sentence torn
+        # into two turns, each answered separately, two bot replies on nearly
+        # every exchange: "ఎన్ని సార్లు అడుగుతారండి దీన్ని?"
         #
-        # The reply path learned this same lesson today, separately: "a reply
-        # is abandoned only on EVIDENCE that he really spoke", after run 881's
-        # agent silenced itself with its own greeting off a speakerphone. A
-        # watchdog a stray noise can switch off is not a watchdog.
+        # But withdrawing is not the same as abandoning, and that was the
+        # ORIGINAL bug. `_cancel_timer` alone handed the turn back to pipecat's
+        # speech timeout, built with `wait_for_transcript=True`. Noise carries
+        # no transcript, so the inner strategy never fired again and the turn
+        # sat stranded until the 5.0s backstop:
+        #
+        #     1.2 + 5.0             = 6.2s   vs run 887's 6.406s
+        #     1.2 + 1.2 + 5.0 + 0.8 = 8.2s   vs run 885's 8.055s
+        #
+        # So the withdrawal now re-arms a LAST-RESORT timer instead of leaving
+        # nothing behind. The inner strategy is still free to end the turn
+        # first, and normally does; this only guarantees that a turn which was
+        # once held can never be stranded by a noise.
         if isinstance(frame, TranscriptionFrame):
-            # Accumulate: Sarvam splits one utterance across finals, which is
-            # the very thing that turns "ఒక ... డెబ్బై" into two turns.
             self._text = f"{self._text} {frame.text}".strip()
-            self._cancel_timer()
         elif isinstance(frame, InterimTranscriptionFrame):
             if frame.text and frame.text.strip():
                 self._text = f"{self._text} {frame.text}".strip()
-                # He is still talking: let the inner strategy decide afresh.
-                self._cancel_timer()
+        elif isinstance(frame, (UserStartedSpeakingFrame,
+                                VADUserStartedSpeakingFrame)):
+            if self._timer is not None and not self._timer.done():
+                self._rearm_backstop()
 
     # --- the decision -----------------------------------------------------
 
@@ -246,6 +262,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
             return
 
         self._defers += 1
+        self._held_params = params
         why = "a filler" if is_only_filler(text) else "unfinished"
         logger.info(
             f"[filler] holding {why} turn {text!r} for {self._defer_secs:.2f}s "
@@ -253,7 +270,22 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._cancel_timer()
         self._timer = asyncio.create_task(self._release_later(params))
 
-    async def _release_later(self, params: UserTurnStoppedParams) -> None:
+    def _rearm_backstop(self) -> None:
+        """Withdraw the hold, but leave a watchdog behind.
+
+        A turn that was held once must never be able to hang. The inner
+        strategy almost always ends it long before this fires; when a noise
+        stops the inner strategy from ever firing again, this is what stops the
+        caller hearing silence.
+        """
+        params = self._held_params
+        self._cancel_timer()
+        if params is not None:
+            self._timer = asyncio.create_task(
+                self._release_later(params, secs=self._backstop_secs))
+
+    async def _release_later(self, params: UserTurnStoppedParams,
+                             secs: float | None = None) -> None:
         """The watchdog. Nothing here depends on the caller speaking again.
 
         Without this a caller whose entire answer is "ఆ" -- which run 314 shows
@@ -261,7 +293,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         timeout. Deferring must never become discarding.
         """
         try:
-            await asyncio.sleep(self._defer_secs)
+            await asyncio.sleep(self._defer_secs if secs is None else secs)
         except asyncio.CancelledError:
             return
         logger.info("[filler] nothing followed; releasing the filler turn")
@@ -271,6 +303,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._cancel_timer()
         self._text = ""
         self._defers = 0
+        self._held_params = None
         await self._call_event_handler("on_user_turn_stopped", params)
 
     def _cancel_timer(self) -> None:
@@ -282,6 +315,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._cancel_timer()
         self._text = ""
         self._defers = 0
+        self._held_params = None
         handler = getattr(self._inner, "handle_user_turn_started", None)
         if handler is not None:
             await handler()
