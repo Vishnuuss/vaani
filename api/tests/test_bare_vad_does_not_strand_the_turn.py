@@ -112,3 +112,36 @@ def test_the_watchdog_still_fires_when_nothing_follows():
         assert len(rec.stops) == 1
 
     asyncio.run(go())
+
+
+# --- runs 893 and 894: the watchdog must not be postponable ----------------
+
+def test_repeated_vad_edges_cannot_push_the_turn_out_for_ever():
+    """A caller saying "hello ... hello ... hello" re-armed it every time.
+
+        18:54:22.662  BOT   మీది సొంత ఇల్లా...?
+                [19.5s of nothing]
+        18:54:42.173  USER  కమర్షియల్ ఏ. హలో. హలో. హలో. హలో.
+
+    Both calls stalled on his first real answer and both ended with him hanging
+    up. The wait now runs to an absolute deadline fixed when the hold began, so
+    re-arming can only ever shorten it.
+    """
+    async def go():
+        w, rec = _wrapped(defer_secs=0.05, max_defers=2, backstop_secs=0.05)
+        await _hold(w)
+        deadline = w._deadline
+        assert deadline is not None, "no deadline was fixed when the hold began"
+
+        for _ in range(20):                      # he keeps saying hello
+            w._observe(UserStartedSpeakingFrame())
+            # Once the turn is out the deadline is cleared, which is correct.
+            # What must never happen is it moving further away.
+            assert w._deadline in (deadline, None), "the deadline moved"
+            await asyncio.sleep(0.01)
+
+        await asyncio.sleep(0.3)
+        assert len(rec.stops) == 1, (
+            "repeated VAD edges postponed the turn indefinitely -- runs 893/894")
+
+    asyncio.run(go())

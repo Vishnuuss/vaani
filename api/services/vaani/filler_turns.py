@@ -158,6 +158,9 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         # The params of the turn currently being held, so a withdrawal can
         # leave a watchdog behind instead of nothing. See `_rearm_backstop`.
         self._held_params = None
+        # Absolute time this turn must come out by, whatever else happens.
+        # Set once when a hold begins and never pushed back.
+        self._deadline = None
         self._in_flight = in_flight
         # Long enough that the inner strategy virtually always wins the race,
         # short enough that a stranded turn is never the 5.0s backstop plus a
@@ -272,6 +275,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
                 f"for {self._defer_secs:.2f}s so he is answered once "
                 f"(hold {self._defers}/{self._max_defers})")
             self._cancel_timer()
+            self._arm_deadline()
             self._timer = asyncio.create_task(self._release_later(params))
             return
 
@@ -288,7 +292,28 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
             f"[filler] holding {why} turn {text!r} for {self._defer_secs:.2f}s "
             f"(hold {self._defers}/{self._max_defers}); waiting for the rest")
         self._cancel_timer()
+        self._arm_deadline()
         self._timer = asyncio.create_task(self._release_later(params))
+
+    def _arm_deadline(self) -> None:
+        """Fix when this turn must come out. Only ever set, never extended."""
+        if self._deadline is not None:
+            return
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:
+            return
+        self._deadline = now + (self._defer_secs * max(1, self._max_defers)
+                                + self._backstop_secs)
+
+    def _remaining_to_deadline(self):
+        if self._deadline is None:
+            return None
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:
+            return None
+        return max(0.0, self._deadline - now)
 
     def _rearm_backstop(self) -> None:
         """Withdraw the hold, but leave a watchdog behind.
@@ -297,12 +322,28 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         strategy almost always ends it long before this fires; when a noise
         stops the inner strategy from ever firing again, this is what stops the
         caller hearing silence.
+
+        The wait runs to an ABSOLUTE deadline fixed when the hold began, and
+        re-arming can only ever SHORTEN it. The first version restarted a fresh
+        `backstop_secs` on every VAD edge, which a caller saying "హలో ... హలో
+        ... హలో" extends for as long as he keeps saying it. That is runs 893
+        and 894, both stalling on the caller's first real answer, both ending
+        with him hanging up:
+
+            18:54:22.662  BOT   మీది సొంత ఇల్లా...?
+                    [19.5s of nothing]
+            18:54:42.173  USER  కమర్షియల్ ఏ. హలో. హలో. హలో. హలో.
+
+        A watchdog the thing it is watching can postpone is not a watchdog.
         """
         params = self._held_params
+        remaining = self._remaining_to_deadline()
+        if params is None or remaining is None:
+            return
         self._cancel_timer()
-        if params is not None:
-            self._timer = asyncio.create_task(
-                self._release_later(params, secs=self._backstop_secs))
+        self._timer = asyncio.create_task(
+            self._release_later(params, secs=min(self._backstop_secs,
+                                                 remaining)))
 
     async def _release_later(self, params: UserTurnStoppedParams,
                              secs: float | None = None) -> None:
@@ -328,6 +369,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._text = ""
         self._defers = 0
         self._held_params = None
+        self._deadline = None
         await self._call_event_handler("on_user_turn_stopped", params)
 
     def _cancel_timer(self) -> None:
@@ -340,6 +382,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         self._text = ""
         self._defers = 0
         self._held_params = None
+        self._deadline = None
         handler = getattr(self._inner, "handle_user_turn_started", None)
         if handler is not None:
             await handler()
