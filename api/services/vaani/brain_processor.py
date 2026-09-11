@@ -137,8 +137,11 @@ class StateInjector(FrameProcessor):
             logger.info(f"[echo] ignoring the agent's own words: {text[:60]!r}")
             return
         result = triage.apply(self.state, text)
-        # Give the state block something concrete to acknowledge.
-        self.state.last_user_text = text.strip()
+        # Give the state block something concrete to acknowledge -- the WHOLE
+        # turn, not the last fragment of it. Run 882: assigning per
+        # transcription let his own "హలో" erase the question he was waiting on,
+        # so the answer-first branch never fired. See `note_user_said`.
+        self.state.note_user_said(text)
         # Before the reply is built, not after: the extractor is async and
         # lands a turn late, so without this the state block still lists the
         # field he just answered and the model dutifully asks again. Run 853.
@@ -741,6 +744,10 @@ class ReplyFilter(FrameProcessor):
                 # re-issued the identical closing instruction on every turn --
                 # seven times, to a caller asking to be let go.
                 self._injector.state.note_reply_delivered()
+                # The reply is out, so whatever he says next is a NEW turn.
+                # Without this, one question would withdraw the checklist for
+                # the rest of the call.
+                self._injector.state.end_user_turn()
 
                 # One structured record per turn. Emitted HERE because this is
                 # the point where the turn is finished and every counter has

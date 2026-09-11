@@ -64,7 +64,9 @@ def test_a_retired_field_is_visible_as_retired():
     for text in ("ఆ సంద మేమ్", "పాయి సంతీల్"):
         s.pending_ask = "house_ownership"
         s.commit_ask()
+        s.note_user_said(text)
         s.note_answer_to_last_ask(text)
+        s.end_user_turn()          # what ReplyFilter does once a reply is out
         s.answered_pending = set()
 
     log = s.turn_log()

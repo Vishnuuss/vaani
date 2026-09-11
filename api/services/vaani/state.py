@@ -653,6 +653,11 @@ class CallState:
     # the lead later can see it even when Sarvam could not.
     answer_counts: dict = field(default_factory=dict)
     heard: dict = field(default_factory=dict)
+    # The caller's CURRENT turn, accumulated across transcriptions. See
+    # `note_user_said` -- run 882's question was erased by his own "హలో".
+    utterance: str = ""
+    # Fields already charged an answer during the CURRENT caller turn.
+    counted_this_turn: set = field(default_factory=set)
     # Per-field written re-ask wordings, supplied by the client's workflow.
     # Empty is normal and safe -- see `variants_for`.
     question_variants: dict = field(default_factory=dict)
@@ -710,6 +715,44 @@ class CallState:
     # itself if it is never shown what it already said.
     asked: list = field(default_factory=list)
 
+    def note_user_said(self, text: str) -> None:
+        """Add one transcription to the caller's CURRENT turn.
+
+        Run 882. `last_user_text` was assigned per transcription:
+
+            self.state.last_user_text = text.strip()
+
+        A caller's turn routinely arrives as several of them -- a sentence, a
+        pause, then "హలో" when nothing comes back. The last fragment overwrote
+        the question, so `_is_question(last_user_text)` saw "హలో." and the
+        answer-first branch in `render()` -- which withdraws the checklist for
+        exactly this case, and which run 218 paid 36 turns to learn -- never
+        ran. He asked what solar costs and was asked what time suited him.
+
+        The perverse part is the direction of the failure: the longer he waited
+        and the more impatient he got, the more certainly his own "hello"
+        erased the question he was waiting on.
+
+        Accumulating also fixes a quieter one. `answer_counts` is incremented
+        per call, so a two-fragment reply ("మాది వచ్చేసింది." / "80 టు 90
+        థౌసండ్ వస్తుంది.") spent two of the caller's two answers on one
+        sentence and retired the field before he had really answered twice.
+        """
+        said = (text or "").strip()
+        if not said:
+            return
+        self.utterance = f"{self.utterance} {said}".strip() if self.utterance else said
+        self.last_user_text = self.utterance
+
+    def end_user_turn(self) -> None:
+        """The agent has replied; the caller's next words start a new turn.
+
+        Without this a question asked once would suppress the checklist for the
+        rest of the call.
+        """
+        self.utterance = ""
+        self.counted_this_turn = set()
+
     def note_answer_to_last_ask(self, text: str) -> None:
         """Record that the caller has just answered the question we asked.
 
@@ -752,9 +795,21 @@ class CallState:
         self.answered_pending.add(field_asked)
         # He answered. Counted whether or not anything was understood -- see
         # `answer_counts` for why this is the only counter he can feel.
+        #
+        # ONCE PER TURN, not once per transcription. Run 882 delivered a single
+        # answer as two of them -- "మాది వచ్చేసింది." then "80 టు 90 థౌసండ్
+        # వస్తుంది." -- and counting each would spend both of his answers on one
+        # sentence and retire the field before he had really answered twice.
+        if field_asked in self.counted_this_turn:
+            # Still keep what he said current: the later fragment is the fuller
+            # sentence, and `heard` is what a human reads off the lead.
+            if self.heard.get(field_asked):
+                self.heard[field_asked][-1] = self.utterance or said
+            return
+        self.counted_this_turn.add(field_asked)
         self.answer_counts[field_asked] = (
             self.answer_counts.get(field_asked, 0) + 1)
-        self.heard.setdefault(field_asked, []).append(said)
+        self.heard.setdefault(field_asked, []).append(self.utterance or said)
 
     def advance(self) -> None:
         """Move the phase forward based on what we actually know.

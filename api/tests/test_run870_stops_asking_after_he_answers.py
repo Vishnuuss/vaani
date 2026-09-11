@@ -57,10 +57,19 @@ def _state() -> CallState:
 
 
 def _answer(s: CallState, field: str, text: str) -> None:
-    """One full turn: we asked `field`, he said `text`."""
+    """One full turn: we asked `field`, he said `text`, we replied.
+
+    `end_user_turn` is what `ReplyFilter` calls once a reply is out, and it is
+    what makes the NEXT utterance a new turn. Without it every fragment after
+    the first is treated as more of the same turn and charged nothing -- which
+    is the point of `counted_this_turn`, and why a turn has to be ended here
+    rather than left open (run 882).
+    """
     s.pending_ask = field
     s.commit_ask()
+    s.note_user_said(text)
     s.note_answer_to_last_ask(text)
+    s.end_user_turn()
 
 
 def test_two_substantive_answers_retire_the_field_even_with_no_value():
