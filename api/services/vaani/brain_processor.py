@@ -768,7 +768,11 @@ class ReplyFilter(FrameProcessor):
                 # apologising for its own interruption.
                 is_repair = said == guardrails.REPAIR_LINE.strip()[:90]
                 if not is_repair:
-                    self._injector.state.commit_ask()
+                    # The sentence is handed over so the ask is charged to the
+                    # field it ASKED ABOUT, not the one the state block
+                    # nominated. Runs 872/879/885 diverged, and the budget was
+                    # spent on the wrong field every time.
+                    self._injector.state.commit_ask(said)
 
                 # Run 803: the goodbye is an event, not a standing order. Until
                 # something recorded that it had been delivered, `render()`

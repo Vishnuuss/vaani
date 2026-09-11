@@ -273,6 +273,13 @@ def register_event_handlers(
         # also consider existing gathered context in workflow_run
         gathered_context = {**workflow_run.gathered_context, **gathered_context}
 
+        # Which code produced this transcript. Without it a call can only be
+        # attributed to a build by comparing timestamps against the deploy log,
+        # which on 11 September was wrong often enough to matter.
+        from api.constants import BUILD_SHA
+
+        gathered_context["build"] = BUILD_SHA
+
         # Set user_speech call tag
         call_tags = gathered_context.get("call_tags", [])
 

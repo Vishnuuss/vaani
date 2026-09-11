@@ -164,6 +164,40 @@ def _get_version() -> str:
 # Application version (read from pyproject.toml)
 APP_VERSION = _get_version()
 
+
+def _get_build_sha() -> str:
+    """The commit this process is actually running.
+
+    On 11 September ten commits shipped in one day and eight calls were placed
+    between them. Nothing on the run record said which code any call had run,
+    so "did that fix work?" could not be answered from the evidence -- only
+    guessed at from timestamps. `APP_VERSION` does not help: it comes from
+    pyproject.toml and had read 1.45.0 across every one of those commits.
+
+    Read from the build environment first (Coolify exports SOURCE_COMMIT), then
+    from the checkout, and never raises: a deployment must not fail to start
+    because it cannot name itself.
+    """
+    import os
+
+    for var in ("SOURCE_COMMIT", "BUILD_SHA", "GIT_SHA", "GIT_COMMIT"):
+        sha = (os.environ.get(var) or "").strip()
+        if sha:
+            return sha[:12]
+    try:
+        head = (APP_ROOT_DIR.parent / ".git" / "HEAD").read_text().strip()
+        if head.startswith("ref:"):
+            ref = (APP_ROOT_DIR.parent / ".git" / head.split(" ", 1)[1].strip())
+            return ref.read_text().strip()[:12]
+        return head[:12]
+    except Exception:
+        return "unknown"
+
+
+# The commit running right now. Stamped on every call -- see BUILD_SHA's use in
+# event_handlers -- so a transcript can be attributed to the code that produced it.
+BUILD_SHA = _get_build_sha()
+
 # Country code mapping: ISO country code -> international dialing prefix
 COUNTRY_CODES = {
     "US": "1",  # United States

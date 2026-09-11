@@ -146,6 +146,47 @@ def _is_question(text: str) -> bool:
 MONEY_FIELDS = ("bill", "amount", "spend", "budget", "consumption")
 
 
+# How much of a field's distinctive wording a sentence must carry before we
+# accept that it asked about that field. Tuned on the real re-asks of runs 872,
+# 879 and 885: the lowest true match there is 0.6 ("మీరు సొంత ఇల్లు,
+# అపార్ట్‌మెంట్ లేదా కమర్షియల్ స్థలం ఏది?" against the configured property
+# question), and the highest false one is 0. Two hits are also required, so a
+# field described by only two words cannot be charged on a single stray token.
+_ASK_MATCH_FLOOR = 0.5
+_ASK_MATCH_MIN_HITS = 2
+# Telugu is agglutinative: ఇల్లా / ఇల్లు / ఇల్లులో are one word wearing three
+# case endings. Comparing whole tokens misses every re-ask that inflects, which
+# is most of them, so two tokens count as the same word when they share this
+# many leading characters AND most of the shorter one.
+_STEM_CHARS = 4
+_STEM_SHARE = 0.6
+
+
+# `\w` is Unicode-aware but matches LETTERS only, and every Telugu vowel sign
+# (ి ీ ు ్ ...) is a combining mark, not a letter. Splitting on `\W+` therefore
+# shreds బిల్లు into fragments and nothing ever matches -- the first version of
+# this did exactly that and scored 0 on every real question. The Indic block and
+# the ZWNJ/ZWJ that hold అపార్ట్‌మెంటా together are kept as word characters.
+_WORD_SPLIT = re.compile(r"[^\wऀ-෿‌‍]+")
+
+
+def _ask_tokens(text: str) -> set:
+    """The words in a question worth matching on. Particles are too short."""
+    return {t for t in _WORD_SPLIT.split((text or "").lower()) if len(t) >= 3}
+
+
+def _same_word(a: str, b: str) -> bool:
+    """One word in two inflections. Prefix-based, deliberately generous."""
+    if a == b:
+        return True
+    n = 0
+    for ca, cb in zip(a, b):
+        if ca != cb:
+            break
+        n += 1
+    return n >= _STEM_CHARS and n >= _STEM_SHARE * min(len(a), len(b))
+
+
 def _is_money_field(name: str) -> bool:
     n = (name or "").lower()
     return any(k in n for k in MONEY_FIELDS)
@@ -456,7 +497,64 @@ class CallState:
         own = (self.questions.get(field_name) or "").strip()
         return [own] if own else []
 
-    def commit_ask(self) -> None:
+    def field_asked_in(self, said: str) -> str:
+        """Which checklist field does this sentence actually ask about?
+
+        Runs 872, 879 and 885. `pending_ask` is what the state block NOMINATED;
+        it is not always what the model then said. This file already recorded
+        the divergence -- "the state correctly nominated monthly_bill and the
+        model asked about location instead" -- and when they diverge the ask
+        budget is charged to the wrong field, so the field being repeated is
+        never bounded and MAX_ASKS_PER_FIELD never bites. Run 885 asked the roof
+        twice and the location twice; run 872 asked property type three times.
+
+        Matched on the client's OWN configured wordings (`variants_for`), never
+        on anything written here, so this stays industry-neutral: MB Solar's
+        phrasing is not HDFC's and neither belongs in this file.
+
+        Tokens shared by several questions ("మీ", "లేదా", "సొంత") cannot tell
+        those questions apart, so only tokens unique to one field are scored.
+        That is what lets a REWORDED re-ask still be recognised -- which is the
+        whole point, because `_is_repeat` compares words and run 879's two
+        location asks were worded differently. A guard on wording cannot catch
+        a repeat of subject.
+
+        Returns "" when nothing matches, and the caller then falls back to
+        `pending_ask` -- so a client with no written questions behaves exactly
+        as it did before this existed.
+        """
+        said_tokens = _ask_tokens(said)
+        if not said_tokens:
+            return ""
+
+        per_field = {}
+        for name in self.questions:
+            toks = set()
+            for wording in self.variants_for(name):
+                toks |= _ask_tokens(wording)
+            if toks:
+                per_field[name] = toks
+        if not per_field:
+            return ""
+
+        shared = {}
+        for toks in per_field.values():
+            for t in toks:
+                shared[t] = shared.get(t, 0) + 1
+
+        best, best_score = "", 0.0
+        for name, toks in per_field.items():
+            distinctive = [t for t in toks if shared[t] == 1]
+            if not distinctive:
+                continue
+            hits = sum(1 for t in distinctive
+                       if any(_same_word(t, s) for s in said_tokens))
+            score = hits / len(distinctive)
+            if hits >= _ASK_MATCH_MIN_HITS and score > best_score:
+                best, best_score = name, score
+        return best if best_score >= _ASK_MATCH_FLOOR else ""
+
+    def commit_ask(self, said: str = "") -> None:
         """Spend one ask, at the moment the agent actually says it.
 
         Counted on speech rather than on prompt-building because they are not
@@ -464,11 +562,15 @@ class CallState:
         fragment -- "హలో", a cough, a half word -- rebuilds the prompt. Counting
         there would burn a field's whole budget on interjections the agent never
         answered, and drop a question that was never actually put to him.
+
+        Charged to the field the sentence ASKED ABOUT, falling back to the
+        nominated one only when the sentence names nothing on the checklist.
+        See `field_asked_in` for why the two are not the same field.
         """
-        if self.pending_ask:
-            self.ask_counts[self.pending_ask] = (
-                self.ask_counts.get(self.pending_ask, 0) + 1)
-            self.last_asked = self.pending_ask
+        charged = self.field_asked_in(said) or self.pending_ask
+        if charged:
+            self.ask_counts[charged] = self.ask_counts.get(charged, 0) + 1
+            self.last_asked = charged
             self.pending_ask = ""
 
     def closing_is_due(self) -> bool:

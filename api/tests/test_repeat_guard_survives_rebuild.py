@@ -105,11 +105,11 @@ def test_the_ask_is_charged_in_exactly_one_place():
     from api.services.vaani import brain_processor
 
     src = inspect.getsource(brain_processor.ReplyFilter.process_frame)
-    assert src.count("state.commit_ask()") == 1, (
+    assert src.count("state.commit_ask(") == 1, (
         "the ask must be charged in exactly one place in process_frame")
 
     start, end = src.index("LLMFullResponseStartFrame"), src.index(
         "LLMFullResponseEndFrame")
-    assert start < src.index("state.commit_ask()"), "unexpected ordering"
-    assert end < src.index("state.commit_ask()"), (
+    assert start < src.index("state.commit_ask("), "unexpected ordering"
+    assert end < src.index("state.commit_ask("), (
         "commit_ask must sit in the END branch, not the START branch")
