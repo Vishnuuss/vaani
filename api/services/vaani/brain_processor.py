@@ -181,6 +181,12 @@ class ReplyFilter(FrameProcessor):
     # every reply.
     _user_speaking = False
     _stale = False
+    # Same reasoning as the two above, and the same history: several suites
+    # build this object with `__new__` and never run `__init__`, so anything
+    # only set there is missing on a live method call. `_said` was added that
+    # way once and every turn after the first died with an AttributeError
+    # (run 213). Empty is also correct on its own terms -- nothing held back.
+    _pending_repeat = ""
 
     def __init__(self, injector: "StateInjector | None" = None,
                  filler_state=None):
@@ -201,6 +207,11 @@ class ReplyFilter(FrameProcessor):
         self._sanitizer = ReplySanitizer(self._caller_names())
         self._spoken = ""
         self._blocked = False
+        # Text held back because it MIGHT be the opening of a repeat and there
+        # is not yet enough of it to tell. Always flushed -- on the next
+        # decidable chunk, or at the end of the reply. Text buffered and never
+        # emitted is silence, which is worse than the repeat it was avoiding.
+        self._pending_repeat = ""
         # Survives across responses: repetition is a property of the CALL, not
         # of one reply, and this processor lives for the whole call.
         #
@@ -288,6 +299,47 @@ class ReplyFilter(FrameProcessor):
         # Telling the model not to repeat itself, via the state block, is kept
         # as well -- but it is not sufficient on its own. Two runs of the
         # battery repeated anyway.
+        # Before the repeat test can run at all, there has to be enough of the
+        # reply to judge -- and for most of this agent's life there never was.
+        #
+        # Run 863, measured end to end:
+        #
+        #   BOT : సైట్ సర్వే కోసం మీరు సిద్ధంగా ఉన్నారా?
+        #   USER: ఉన్నాము ఉన్నాము.                        (we are ready)
+        #   BOT : సరే, సైట్ సర్వే కోసం మీరు సిద్ధంగా ఉన్నారా?
+        #
+        # `_is_repeat` gets that pair right -- handed the whole second reply it
+        # returns True. It was never handed it. Two constants were never
+        # reconciled: `ReplySanitizer` releases after **24** characters, so the
+        # first `candidate` is ~24 characters INCLUDING the leading "సరే, ",
+        # while `_is_repeat` needs `_REPEAT_PREFIX` (**25**) characters of
+        # substance AFTER `_strip_ack` removes that acknowledgement. The first
+        # chunk could never clear the bar, and once it was emitted `_spoken`
+        # was non-empty and the check never ran again.
+        #
+        # The state block ASKS every reply to open with an acknowledgement, so
+        # this was not an edge case: the guard was structurally unable to fire,
+        # on every turn, of every call.
+        #
+        # It is fixed by waiting for one more chunk -- but only when a repeat is
+        # actually SUSPECTED. Waiting unconditionally would put a chunk of
+        # latency on every turn of every call to catch something rare, and
+        # waiting after audio is out is forbidden outright: that is the
+        # truncation bug, where callers heard "అర్థమైంది బిల్లు?". So the delay
+        # is paid only when what we have so far already looks like the opening
+        # of something we have said before, and never once anything has been
+        # spoken. A false suspicion costs one chunk of latency; it can never
+        # cause a wrong substitution, because the real `_is_repeat` still has to
+        # agree before anything is replaced.
+        if not self._spoken:
+            pending = self._pending_repeat + candidate
+            head = _normalise(_strip_ack(pending))
+            if len(head) < _REPEAT_PREFIX and self._looks_like_repeat(head):
+                self._pending_repeat = pending
+                return ""
+            self._pending_repeat = ""
+            candidate = pending
+
         if not self._spoken and self._is_repeat(candidate):
             self._blocked = True
             logger.warning(
@@ -343,6 +395,46 @@ class ReplyFilter(FrameProcessor):
         logger.warning(f"[guardrail] reply replaced before TTS: {rules}")
         return guardrails.SAFE_CLOSE if closing else guardrails.SAFE_FALLBACK
 
+    def _previous_replies(self) -> list[str]:
+        """Everything this call has already said, from both stores.
+
+        `self._said` lives on this object and survives the whole phone call;
+        `state.asked` is persisted and survives the pipeline rebuild that text
+        chat does per message. Factored out so `_is_repeat` and
+        `_looks_like_repeat` can never drift apart about what "previous" means.
+        """
+        previous = list(self._said)
+        state = getattr(self._injector, "state", None)
+        if state is not None:
+            previous.extend(getattr(state, "asked", []) or [])
+        return previous
+
+    def _looks_like_repeat(self, head: str) -> bool:
+        """Is this partial reply the opening of something already said?
+
+        Used ONLY to decide whether to wait for one more chunk before judging.
+        It deliberately drops the `_REPEAT_PREFIX` length floor that
+        `_is_repeat` enforces, because the whole point is to answer the
+        question "might this become a repeat once there is enough of it".
+
+        That makes it far looser than `_is_repeat`, and that is safe precisely
+        because it decides nothing: a false positive costs one chunk of
+        latency, and `_is_repeat` still has to agree before a word is replaced.
+
+        The floor of 6 stops a bare "సరే" or a two-character fragment matching
+        every previous reply and stalling the opening of every turn.
+        """
+        if len(head) < 6:
+            return False
+        for prev in self._previous_replies():
+            other = _normalise(_strip_ack(prev))
+            if len(other) < len(head):
+                continue
+            if SequenceMatcher(None, head, other[: len(head)]).ratio() >= (
+                    _REPEAT_SIMILARITY):
+                return True
+        return False
+
     def _is_repeat(self, text: str) -> bool:
         """Has this call already said something this close to it?
 
@@ -370,12 +462,7 @@ class ReplyFilter(FrameProcessor):
         # the guard was blind -- run 721 asked one question four times with the
         # ask budget already correctly capped at two. `state.asked` is
         # persisted across turns, so it is the half that survives a rebuild.
-        previous = list(self._said)
-        state = getattr(self._injector, "state", None)
-        if state is not None:
-            previous.extend(getattr(state, "asked", []) or [])
-
-        for prev in previous:
+        for prev in self._previous_replies():
             other = _normalise(_strip_ack(prev))
             if not other:
                 continue
@@ -432,6 +519,7 @@ class ReplyFilter(FrameProcessor):
             # read fresh rather than captured at construction.
             self._sanitizer = ReplySanitizer(self._caller_names())
             self._spoken = ""
+            self._pending_repeat = ""
             # A generation that BEGINS while the caller is mid-sentence is
             # stale: whatever it is answering, he has since said more. Marked
             # here for the whole reply rather than tested per fragment -- a
@@ -465,6 +553,28 @@ class ReplyFilter(FrameProcessor):
             self._spoken += speakable
 
         if isinstance(frame, LLMFullResponseEndFrame):
+            # Flush anything held back by the repeat check FIRST.
+            #
+            # A reply can end while text is still buffered -- a short one is
+            # entirely one chunk -- and text that is buffered and never emitted
+            # is silence. That is a worse failure than the repeat it was
+            # waiting to rule out, so the reply is now decidable and gets
+            # decided: either it really was a repeat, and the repair line
+            # replaces it, or it was not, and it is spoken exactly as written.
+            if self._pending_repeat:
+                held, self._pending_repeat = self._pending_repeat, ""
+                if not self._spoken and self._is_repeat(held):
+                    self._blocked = True
+                    logger.warning(
+                        "[repeat] already asked this; saying it could not hear "
+                        f"instead: {held[:60]!r}")
+                    if self._injector:
+                        self._injector.state.misheard_last_turn = True
+                    held = guardrails.REPAIR_LINE
+                if held:
+                    self._spoken += held
+                    await self.push_frame(LLMTextFrame(held), direction)
+
             # Always drain: the old filter had no flush here, so a short reply
             # with no trailing newline could be swallowed whole.
             tail = self._sanitizer.finish()
