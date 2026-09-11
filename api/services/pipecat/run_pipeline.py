@@ -60,6 +60,7 @@ from api.services.vaani.end_call_bridge import EndCallBridge
 from api.services.vaani import turn_taking as vaani_turn_taking
 from api.services.vaani import ReplyFilter, StateInjector
 from api.services.vaani.filler_player import FillerPlayer, FillerState
+from api.services.vaani.filler_turns import ReplyInFlight
 from api.services.vaani.prewarm import prewarm_prompt_cache
 from api.services.vaani import Brief as VaaniBrief
 from api.services.vaani import compile_prompt as compile_vaani_prompt
@@ -178,7 +179,8 @@ def compile_vaani_system_prompt(workflow_graph, *, workflow_name: str) -> str:
 
 
 def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
-                      workflow_name: str, filler_state=None):
+                      workflow_name: str, filler_state=None,
+                      in_flight=None):
     """Build Vaani's (StateInjector, ReplyFilter) from a Dograh workflow.
 
     A Dograh single-prompt agent already carries what a Vaani `Brief` needs: the
@@ -230,7 +232,8 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
 
     brief = VaaniBrief(business=workflow_name or "", questions=questions)
     injector = StateInjector(brief, context, system_prompt)
-    return injector, ReplyFilter(injector, filler_state=filler_state)
+    return injector, ReplyFilter(injector, filler_state=filler_state,
+                                 in_flight=in_flight)
 
 
 def build_speculation_processors(workflow_graph, llm, context,
@@ -788,6 +791,11 @@ async def _run_pipeline_impl(
     is_realtime = user_config.is_realtime and user_config.realtime is not None
 
     # Create services based on user configuration
+    # One per call, shared by the turn guard and the reply filter. Run 889: two
+    # caller finals landed before any audio, each became its own turn, and he
+    # was answered twice -- "ఒకే క్వశ్చన్, రెండు క్వశ్చన్లు".
+    reply_in_flight = ReplyInFlight()
+
     if is_realtime:
         llm = create_realtime_llm_service(user_config, audio_config)
         stt = None
@@ -1053,10 +1061,10 @@ async def _run_pipeline_impl(
             f"requested={turn_start_strategy} "
             f"uses_external_turns={uses_external_turns}"
         )
-
         user_turn_stop_strategies = _create_non_realtime_user_turn_stop_strategies(
             run_configs,
             uses_external_turns=uses_external_turns,
+            in_flight=reply_in_flight,
         )
         user_turn_strategies = UserTurnStrategies(
             start=user_turn_start_strategies,
@@ -1204,6 +1212,7 @@ async def _run_pipeline_impl(
                 _vaani_prompt,
                 workflow_name=getattr(workflow, "name", "") or "",
                 filler_state=filler_state,
+                in_flight=reply_in_flight,
             )
             # Warm the provider's prompt cache while the greeting plays. The
             # first turn of a call costs an extra 0.393s at the median and over

@@ -164,7 +164,7 @@ def create_user_turn_start_strategies(
 
 
 def create_user_turn_stop_strategies(
-    run_configs: dict, *, uses_external_turns: bool
+    run_configs: dict, *, uses_external_turns: bool, in_flight=None
 ):
     """When is the caller judged to have FINISHED. The expensive decision.
 
@@ -184,7 +184,8 @@ def create_user_turn_stop_strategies(
         return [ExternalUserTurnStopStrategy()]
 
     return apply_filler_guard(
-        _build_user_turn_stop_strategies(run_configs), run_configs)
+        _build_user_turn_stop_strategies(run_configs), run_configs,
+        in_flight=in_flight)
 
 
 def _telugu_analyzer(run_configs: dict, *, stop_secs: float | None = None):

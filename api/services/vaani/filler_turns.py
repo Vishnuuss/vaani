@@ -145,7 +145,8 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
 
     def __init__(self, inner: BaseUserTurnStopStrategy, *,
                  defer_secs: float = 1.2, max_defers: int = 2,
-                 backstop_secs: float | None = None, **kwargs):
+                 backstop_secs: float | None = None,
+                 in_flight: 'ReplyInFlight | None' = None, **kwargs):
         super().__init__(**kwargs)
         self._inner = inner
         self._defer_secs = max(0.0, float(defer_secs))
@@ -157,6 +158,7 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         # The params of the turn currently being held, so a withdrawal can
         # leave a watchdog behind instead of nothing. See `_rearm_backstop`.
         self._held_params = None
+        self._in_flight = in_flight
         # Long enough that the inner strategy virtually always wins the race,
         # short enough that a stranded turn is never the 5.0s backstop plus a
         # hold. Runs 885 and 887 measured 8.055s and 6.406s of dead air.
@@ -255,6 +257,24 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
 
     async def _on_inner_stopped(self, _strategy, params: UserTurnStoppedParams):
         text = self._text
+
+        # A reply to his LAST breath is already being built and he has not
+        # heard any of it. Answering this one too means answering twice -- run
+        # 889, four times in a sixty-second call. Hold it: when the turn is
+        # released the accumulated text goes out as ONE turn, and he gets one
+        # reply covering everything he said.
+        busy = self._in_flight is not None and self._in_flight.unheard
+        if busy and self._defer_secs > 0 and self._defers < self._max_defers:
+            self._defers += 1
+            self._held_params = params
+            logger.info(
+                f"[filler] a reply is already being built; holding {text!r} "
+                f"for {self._defer_secs:.2f}s so he is answered once "
+                f"(hold {self._defers}/{self._max_defers})")
+            self._cancel_timer()
+            self._timer = asyncio.create_task(self._release_later(params))
+            return
+
         if (self._defer_secs <= 0
                 or self._defers >= self._max_defers
                 or not should_hold(text)):
@@ -321,7 +341,54 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
             await handler()
 
 
-def apply_filler_guard(strategies, run_configs: dict):
+class ReplyInFlight:
+    """Is a reply being built right now, with none of it spoken yet?
+
+    Shared between `ReplyFilter`, which knows, and the turn guard, which needs
+    to know. One instance per call.
+
+    Run 889. The caller said one thing in two breaths and was answered twice:
+
+        18:09:52.966  USER  ఆ సరే. మాట్లాడవచ్చు.
+        18:09:54.730  USER  సార్ అండి.                 second final, 1.8s later
+        18:09:56.984  BOT   [reply to the first]
+        18:09:58.544  BOT   [reply to the second]
+
+    Both finals landed before any audio was produced, each became a turn, and
+    each got its own reply. He told us four times what that sounds like from
+    his end -- "ఒకే క్వశ్చన్, రెండు క్వశ్చన్లు" (one question, two questions),
+    "ఒక్క క్వశ్చన్ ఒకసారి అడగండి" (ask one question at a time) -- and hung up.
+
+    `_stale` in the reply path cannot catch this: neither reply is stale, both
+    were generated after their own turn ended and neither was overtaken.
+
+    The window is deliberately narrow -- generation started, nothing spoken.
+    Once audio is out, this must be FALSE: interrupting a caller who talks over
+    the agent is barge-in, and holding his turn then would break it.
+    """
+
+    def __init__(self):
+        self.generating = False
+        self.spoken = False
+
+    def begin(self) -> None:
+        self.generating = True
+        self.spoken = False
+
+    def note_spoken(self) -> None:
+        self.spoken = True
+
+    def done(self) -> None:
+        self.generating = False
+        self.spoken = False
+
+    @property
+    def unheard(self) -> bool:
+        """A reply exists, and the caller has not heard a word of it yet."""
+        return bool(self.generating and not self.spoken)
+
+
+def apply_filler_guard(strategies, run_configs: dict, in_flight=None):
     """Wrap the stop strategies in the filler guard, or return them untouched.
 
     Disabled -- the default -- returns the SAME list object with the SAME
@@ -345,5 +412,6 @@ def apply_filler_guard(strategies, run_configs: dict):
     # single-element list is the ordinary case.
     return strategies[:-1] + [
         FillerAwareUserTurnStopStrategy(strategies[-1], defer_secs=defer,
-                                        max_defers=max_defers)
+                                        max_defers=max_defers,
+                                        in_flight=in_flight)
     ]

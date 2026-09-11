@@ -230,7 +230,7 @@ class ReplyFilter(FrameProcessor):
     _pending_repeat = ""
 
     def __init__(self, injector: "StateInjector | None" = None,
-                 filler_state=None):
+                 filler_state=None, in_flight=None):
         """`injector` is the voice path's call state.
 
         Text chat has no CallState and no phone to hang up, but it runs the same
@@ -245,6 +245,10 @@ class ReplyFilter(FrameProcessor):
         # to open with "సరే"/"మంచిది", and the filler has usually just said one
         # of those -- without this the caller hears the same word twice.
         self._filler_state = filler_state
+        # Shared with the turn guard so a second caller final, arriving while
+        # this reply is still being built and unheard, merges into one turn
+        # instead of earning a reply of its own. Run 889.
+        self._in_flight = in_flight
         self._sanitizer = ReplySanitizer(self._caller_names())
         self._spoken = ""
         self._blocked = False
@@ -653,6 +657,8 @@ class ReplyFilter(FrameProcessor):
             # reply that starts on top of him and continues after he pauses is
             # still a reply to the wrong thing, and half of it is worse than
             # none.
+            if self._in_flight is not None:
+                self._in_flight.begin()
             self._stale = self._user_speaking
             if self._stale:
                 logger.warning("[turn] a reply started while the caller was "
@@ -682,8 +688,12 @@ class ReplyFilter(FrameProcessor):
                     return
             frame = LLMTextFrame(speakable)
             self._spoken += speakable
+            if self._in_flight is not None and speakable.strip():
+                self._in_flight.note_spoken()
 
         if isinstance(frame, LLMFullResponseEndFrame):
+            if self._in_flight is not None:
+                self._in_flight.done()
             self._generating = False
             # Held text is not exempt from the rules the stream obeys.
             #
