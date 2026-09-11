@@ -226,6 +226,32 @@ WANTS_THE_FLOOR = re.compile(
     r"|hear\s+me\s+out|hold\s+on|wait\s+a\s+(minute|second))",
     re.IGNORECASE)
 
+# --- he wants his own questions answered, not more of ours -------------------
+#
+# Run 887's last words before the call timed out:
+#
+#     సైట్ సర్వే కొంచెం పక్కన పెడతారా దాన్ని, డౌట్స్ క్లియర్ చేయండి ఫస్ట్
+#     "put the site survey aside -- clear my doubts FIRST"
+#
+# He had said it three other ways first. He asked who the vendor was, what
+# company this is, whether they had installed for anyone before, and every
+# answer was chased with another qualification question.
+#
+# This is NOT `WANTS_THE_FLOOR`, which is the nearest existing intent and the
+# wrong shape: that branch invites him to go on and then stops talking. He does
+# not want the floor. He wants an answer. Run 885 is the same intent, angrier:
+# "ఆ నా క్వశ్చన్ కి ఆన్సర్ ఇవ్వండి" -- ANSWER MY QUESTION -- after which he
+# hung up.
+ANSWER_ME_FIRST = re.compile(
+    r"((డౌట్|డౌట్స్|సందేహ\w*)\s*\w*\s*(క్లియర్|తీర్చ\w*|చెప్ప\w*)"
+    r"|(ప్రశ్న\w*|క్వశ్చన్\w*)\s*\w*\s*(ఆన్సర్|సమాధానం|జవాబు)"
+    r"|(ఆన్సర్|సమాధానం|జవాబు)\s*(ఇవ్వండి|చెప్పండి|చేయండి)"
+    r"|పక్కన\s*పెట్ట\w*|పక్కన\s*పెడ\w*"
+    r"|मेरे\s*सवाल\s*का\s*जवाब|पहले\s*बताइए"
+    r"|(answer|reply\s+to)\s+(my|the)\s+(question|doubt)s?"
+    r"|clear\s+(my|the)\s+doubts?)",
+    re.IGNORECASE)
+
 # --- a plain refusal ---------------------------------------------------------
 # One refusal earns exactly one gentle probe (Layer 2). The SECOND one ends the
 # call. Counting happens in `apply` because it needs the call's history --
@@ -280,6 +306,8 @@ class Triage:
     next_step_agreed: bool = False
     # The caller has asked for the floor. Not a stop -- a "wait".
     wants_the_floor: bool = False
+    # He asked us to stop asking and start answering. See ANSWER_ME_FIRST.
+    answer_me_first: bool = False
     no_more_questions: bool = False
     already_answered: bool = False
     deferred: bool = False
@@ -329,6 +357,7 @@ def triage(text: str) -> Triage:
         buying_signal=bool(BUYING.search(t)),
         no_more_questions=bool(NO_MORE_QUESTIONS.search(t)),
         wants_the_floor=bool(WANTS_THE_FLOOR.search(t)),
+        answer_me_first=bool(ANSWER_ME_FIRST.search(t)),
         already_answered=bool(ALREADY_ANSWERED.search(t)),
         deferred=bool(DEFERRAL.search(t)) and not agreed,
     )
@@ -487,6 +516,8 @@ def apply(state, text: str) -> Triage:
     # rest of the call. It was saved as null. An ask the caller was talked over
     # is not an ask he declined to answer, and the budget exists to stop
     # INTERROGATION (run 218), not to punish him for our own impatience.
+    if result.answer_me_first:
+        state.answer_me_first = True
     if result.wants_the_floor:
         state.wants_the_floor = True
         _refund_ask(state, "the caller asked to be heard")

@@ -224,6 +224,9 @@ class CallState:
     buying_signal: bool = False      # caller asked to book, or asked a closing question
     refusals: int = 0                # plain refusals so far; the 2nd ends the call
     no_more_questions: bool = False  # caller explicitly asked to stop being asked
+    # He asked us to answer HIS questions before asking any more of ours.
+    # Run 887: "site survey pakkana peḍatārā -- clear my doubts FIRST".
+    answer_me_first: bool = False
     must_end: bool = False           # removal requested, hostile, or fraud accusation
     end_reason: str = ""
 
@@ -289,14 +292,22 @@ class CallState:
             return False
         field = (self.still_need[0] if asking else
                  next(f for f in self.known if _is_money_field(f)))
-        if not amount.plausible:
-            # Heard, but not believed. Run 286's caller said "60 క్రోర్స్" and
-            # was congratulated on it. Recording the figure would put a fiction
-            # in the lead record; ignoring it silently would ask the same
-            # question again. So it is neither: the state block asks him to
-            # confirm, once.
-            self.doubted = amount
-            return False
+        # What he said is what is recorded. No ceiling, no challenge.
+        #
+        # This used to reject anything over MAX_PLAUSIBLE and store nothing.
+        # Run 887: an INDUSTRY caller said "70 లాక్స్" and reached the vendor
+        # with no bill at all -- the most valuable kind of lead this business
+        # gets, stripped of the one number that sizes the job. Runs 864 and 868
+        # were told their own figure could not be a bill, and hung up.
+        #
+        # The client's instruction on 11 Sep: believe him, never delete it,
+        # let sales sanity-check the number. The mishearing the ceiling existed
+        # to catch -- "వేలు" (thousands) heard as "లక్షలు" -- is real and is
+        # NOT solved by this. It is an accepted trade: a figure that is
+        # recorded can be corrected later, and one that was never recorded
+        # cannot. Being wrong here costs an odd row in a spreadsheet; being
+        # wrong the other way costs the lead.
+        self.doubted = None
         self.known[field] = str(amount.rupees)
         self.amount = amount
         if revising:
@@ -852,6 +863,12 @@ class CallState:
         Without this a question asked once would suppress the checklist for the
         rest of the call.
         """
+
+        # His doubts were answered on this turn. The latch does not carry into
+        # the next one -- if he has another, triage re-latches it from what he
+        # says. Left standing, it would withdraw the checklist for the rest of
+        # the call and nothing would ever be qualified again.
+        self.answer_me_first = False
         self.utterance = ""
         self.counted_this_turn = set()
 
@@ -1129,6 +1146,29 @@ class CallState:
                 "turn. Say one short line inviting him to go on -- చెప్పండి "
                 "సార్, వింటున్నాను -- and then STOP TALKING. Do not fill the "
                 "silence and do not move to another question.")
+        elif self.answer_me_first:
+            # He asked us to stop asking and start answering. Run 887's last
+            # words: "సైట్ సర్వే కొంచెం పక్కన పెడతారా దాన్ని, డౌట్స్ క్లియర్
+            # చేయండి ఫస్ట్" -- put the site survey aside, clear my doubts
+            # first. He had already said it three other ways, and every answer
+            # he did get was chased with another qualification question.
+            #
+            # The checklist is withdrawn, for the same reason it is withdrawn
+            # for a question and for `wants_the_floor`: prose telling the model
+            # to hold off does not beat a list of fields at the end of the
+            # context. Removing the list does.
+            #
+            # It clears on the first turn where he asks nothing, so
+            # qualification resumes on its own once his doubts are done.
+            self.pending_ask = ""
+            lines.append(
+                "STILL_NEED: [] -- HE ASKED YOU TO ANSWER HIS DOUBTS FIRST, "
+                "before any more of your questions. Ask NOTHING this turn -- "
+                "no qualification, no site survey, no appointment. Answer what "
+                "he asked, plainly and in his own terms, from your facts; if "
+                "you do not know, say the team will confirm it. Never invent a "
+                "number, price, location or brand. Then ask whether he has any "
+                "other doubts, and nothing else.")
         elif he_asked:
             # THE CHECKLIST IS SUPPRESSED, and that is the entire point.
             #

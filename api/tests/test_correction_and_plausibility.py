@@ -60,11 +60,24 @@ def test_the_reply_is_told_to_say_the_new_figure_back():
     assert "CORRECTED THEMSELVES" in s.render()
 
 
-def test_an_implausible_correction_is_not_accepted_either():
+def test_a_correction_is_believed_however_large_it_is():
+    """The policy here was REVERSED by the client on 11 September.
+
+    It used to refuse an implausible correction and keep the earlier figure.
+    That rule also deleted run 887's industry bill of 70 lakhs and contradicted
+    runs 864 and 868 to their faces, both of whom hung up. The instruction is
+    now: believe him, never delete it, let sales sanity-check the number.
+
+    The cost is visible right here and is accepted knowingly -- "అరవై కోట్లు",
+    60 crores a month, is almost certainly "వేలు" misheard as "కోట్లు", and it
+    is now recorded. A figure that is recorded can be corrected later; one that
+    was never recorded cannot. The MIN_PLAUSIBLE floor still stands, so a stray
+    digit is not a bill -- see test_the_extractor_cannot_store_a_62_rupee_monthly_bill.
+    """
     s = state()
     s.note_amount("పది లక్షలు")
-    assert not s.note_amount("సారీ, అరవై కోట్లు")
-    assert s.known["monthly_bill"] == "1000000"
+    assert s.note_amount("సారీ, అరవై కోట్లు")
+    assert s.known["monthly_bill"] == "600000000"
 
 
 # --- the implausible figure ------------------------------------------------

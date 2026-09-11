@@ -205,18 +205,35 @@ class FillerAwareUserTurnStopStrategy(BaseUserTurnStopStrategy):
         return ProcessFrameResult.CONTINUE if result is None else result
 
     def _observe(self, frame: Frame) -> None:
+        # The hold is withdrawn on EVIDENCE that he spoke -- new text -- and
+        # never on a VAD edge alone.
+        #
+        # It used to be the other way round, and that is where the dead air
+        # came from. Run 887 turn 10 measured a 6.406s endpoint with the
+        # transcript arriving in 0.270s; run 885 turn 3 measured 8.055s. A bare
+        # VAD edge during the hold cancelled this watchdog and handed the
+        # decision back to the inner strategy -- pipecat's speech timeout,
+        # built with `wait_for_transcript=True`. Noise carries no transcript,
+        # so the inner strategy never fired again and the turn sat stranded
+        # until the 5.0s backstop:
+        #
+        #     1.2 + 5.0             = 6.2s   vs 6.406s measured
+        #     1.2 + 1.2 + 5.0 + 0.8 = 8.2s   vs 8.055s measured
+        #
+        # The reply path learned this same lesson today, separately: "a reply
+        # is abandoned only on EVIDENCE that he really spoke", after run 881's
+        # agent silenced itself with its own greeting off a speakerphone. A
+        # watchdog a stray noise can switch off is not a watchdog.
         if isinstance(frame, TranscriptionFrame):
             # Accumulate: Sarvam splits one utterance across finals, which is
             # the very thing that turns "ఒక ... డెబ్బై" into two turns.
             self._text = f"{self._text} {frame.text}".strip()
+            self._cancel_timer()
         elif isinstance(frame, InterimTranscriptionFrame):
             if frame.text and frame.text.strip():
                 self._text = f"{self._text} {frame.text}".strip()
-        elif isinstance(frame, (UserStartedSpeakingFrame,
-                                VADUserStartedSpeakingFrame)):
-            # New speech within a deferral is exactly what we were waiting
-            # for; let the inner strategy decide the turn afresh.
-            self._cancel_timer()
+                # He is still talking: let the inner strategy decide afresh.
+                self._cancel_timer()
 
     # --- the decision -----------------------------------------------------
 
