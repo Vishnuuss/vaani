@@ -367,8 +367,8 @@ def test_a_plain_answer_is_not_mistaken_for_a_question(text):
 def test_the_state_block_demands_an_answer_before_the_next_question():
     st = _state(last_user_text="లోన్ దొరుకుతుందా")
     block = st.render()
-    assert "THEY ASKED SOMETHING" in block
-    assert "answer it first" in block
+    assert "THE CALLER ASKED YOU SOMETHING" in block
+    assert "FIRST answer THAT" in block
     # Admitting ignorance must be offered as a complete answer, or the model
     # skips the question instead -- which is what it did for "where is your
     # company", after it stopped inventing "we are in Hyderabad".
@@ -378,7 +378,7 @@ def test_the_state_block_demands_an_answer_before_the_next_question():
 
 def test_no_such_demand_when_they_simply_answered():
     st = _state(last_user_text="రెండు వేలు వస్తుంది")
-    assert "THEY ASKED SOMETHING" not in st.render()
+    assert "THE CALLER ASKED YOU SOMETHING" not in st.render()
 
 
 # --- the guardrail must not splice into speech already going out -------------

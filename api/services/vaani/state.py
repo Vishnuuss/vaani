@@ -1020,23 +1020,49 @@ class CallState:
                 "the line. Say one short farewell and END THE CALL now. Do NOT "
                 "repeat the appointment and do NOT ask anything.")
 
+        # Did he just ask us something? Read ONCE, here, because it now gates
+        # the closing branches below.
+        #
+        # Runs 872, 882 and 885. The answer-first instruction further down this
+        # chain was never wrong and was never missing -- it was UNREACHABLE.
+        # It sat below `next_step_agreed`, `buying_signal` and
+        # `appointment_iso`, so from the moment a caller agreed to a visit,
+        # every question he asked for the rest of the call was answered with a
+        # time slot:
+        #
+        #   USER  సోలార్ ఛానల్స్ కాస్ట్ ఎంత అవుతుంది...?   what does it cost?
+        #   BOT   రేపు ఉదయం ten o'clock ... బుక్ చేశాను.   [a booking]
+        #   USER  ఆ నా క్వశ్చన్ కి ఆన్సర్ ఇవ్వండి           ANSWER MY QUESTION
+        #
+        # He hung up. Letting a closing branch step over a direct question is
+        # the most expensive thing this agent does: the caller is engaged, and
+        # being talked past is what ends the call.
+        #
+        # Two branches are deliberately NOT gated. `must_end`: a caller who has
+        # asked to hang up is let go, not kept on the line to be answered --
+        # that is run 803, seven closings to a man trying to leave.
+        # `appointment_iso`: that branch already answers him first AND quotes
+        # his exact words into the instruction, which is stronger than the
+        # generic branch below. Gating it would be a downgrade.
+        he_asked = _is_question(self.last_user_text)
+
         if self.must_end:
             lines.append(f"STILL_NEED: [] -- STOP. {self.end_reason} "
                          "Say one short closing sentence and END THE CALL. "
                          "Ask NOTHING. Pitch NOTHING.")
-        elif self.disqualified:
+        elif self.disqualified and not he_asked:
             lines.append("STILL_NEED: [] -- DISQUALIFIED. Do not ask anything "
                          "further and do not sell. Close warmly in one sentence.")
-        elif self.next_step_agreed and not self.appointment_iso:
+        elif self.next_step_agreed and not self.appointment_iso and not he_asked:
             # Agreeing to a visit is not a visit. Ending here leaves the vendor
             # with a lead and no time to turn up at, so the times come first.
             lines.append("STILL_NEED: [] -- THEY AGREED TO THE VISIT but no "
                          "time is fixed yet. " + self.offer_line())
-        elif self.next_step_agreed:
+        elif self.next_step_agreed and not he_asked:
             lines.append("STILL_NEED: [] -- NEXT STEP IS AGREED. Do not ask "
                          "anything further. Thank them and end the call NOW. "
                          "Remaining details are collected at the visit.")
-        elif self.buying_signal:
+        elif self.buying_signal and not he_asked:
             lines.append("STILL_NEED: [] -- CALLER IS READY TO BOOK. Stop "
                          "qualifying. " + self.offer_line())
         elif self.appointment_iso:
@@ -1103,7 +1129,7 @@ class CallState:
                 "turn. Say one short line inviting him to go on -- చెప్పండి "
                 "సార్, వింటున్నాను -- and then STOP TALKING. Do not fill the "
                 "silence and do not move to another question.")
-        elif _is_question(self.last_user_text):
+        elif he_asked:
             # THE CHECKLIST IS SUPPRESSED, and that is the entire point.
             #
             # Answering first was already instructed here, as a line sitting
