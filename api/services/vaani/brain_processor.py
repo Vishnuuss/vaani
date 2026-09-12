@@ -426,59 +426,16 @@ class ReplyFilter(FrameProcessor):
             state = self._injector.state
             subject_of = getattr(state, "field_asked_in", None)
             asked_about = subject_of(candidate) if callable(subject_of) else ""
-            known = getattr(state, "known", {})
-            counts = getattr(state, "ask_counts", {}) or {}
-            cap = getattr(state, "MAX_ASKS_PER_FIELD", 2)
-            # TWO states end a question's life, and only one of them was being
-            # enforced. Run 898 asked about the roof four times:
-            #
-            #   36:19  BOT   మీకు సొంత రూఫ్ లేదా టెర్రస్ ఉందా?
-            #   36:32  USER  మాకు పెద్ద ఫ్యాక్టరీ ఉందండి ప్రస్తుతానికి
-            #   36:39  BOT   మీకు సొంత రూఫ్ లేదా టెర్రస్ ఉందా?
-            #   36:42  USER  మాకు ఫ్యాక్టరీ ఉంది
-            #   36:44  BOT   మీకు రూఫ్ లేదా టెర్రస్ ఉందా?
-            #
-            # The budget was charged correctly and the field left STILL_NEED
-            # after two. But it was never `known` -- he answered indirectly, by
-            # naming a factory, and never said yes or no -- so the guard below
-            # did not apply and nothing else stopped the model.
-            #
-            # Out of budget is not the same state as answered. A field whose
-            # budget is spent has had every question it is ever going to get.
-            spent = bool(asked_about) and counts.get(asked_about, 0) >= cap
-            if asked_about and (asked_about in known or spent):
+            if asked_about and asked_about in getattr(state, "known", {}):
                 self._blocked = True
-                why = ("already known "
-                       f"({known.get(asked_about)!r})" if asked_about in known
-                       else f"out of budget ({counts.get(asked_about)} asks)")
                 logger.warning(
-                    f"[answered] {asked_about} is {why}; not asking it again: "
+                    f"[answered] {asked_about} is already known "
+                    f"({state.known.get(asked_about)!r}); not asking it again: "
                     f"{candidate[:60]!r}")
                 state.misheard_last_turn = True
                 return guardrails.REPAIR_LINE
 
-            # CHARGED HERE, where the question becomes real to the caller,
-            # rather than only at `LLMFullResponseEndFrame`.
-            #
-            # The budget was failing on one or two fields every call -- run 897
-            # bill 4 / location 3, run 898 roof 4 / survey 3, run 899 property 3
-            # / location 3 -- and the calls with the most overruns were the
-            # calls with the most double replies. That is the coupling: a reply
-            # that is overtaken never reaches the End frame, so its question is
-            # never charged, and an uncharged ask is one the budget cannot see.
-            # `last_asked` is set there too, so `answered_pending` loses its
-            # footing on exactly those turns.
-            #
-            # The trade is named rather than hidden. A question cut off
-            # mid-word now counts, which run 783 argued against on the grounds
-            # that the caller never heard the whole thing. Being asked the same
-            # question four times is the complaint actually on the table, and
-            # two asks is a generous budget. `charged_this_turn` keeps the two
-            # charging points from counting one question twice.
-            charge = getattr(state, "commit_ask", None)
-            if asked_about and callable(charge):
-                charge(candidate)
-                state.ask_charged_on_air = True
+        # The model writing its OWN "I could not hear you" counts exactly like
         # the guard writing one: whatever comes back next is an answer to a
         # question we have already failed to understand once. Run 314 apologised
         # for not hearing the city and asked about the property instead.
@@ -869,11 +826,7 @@ class ReplyFilter(FrameProcessor):
                 # abandoned: the agent spends the caller's question budget
                 # apologising for its own interruption.
                 is_repair = said == guardrails.REPAIR_LINE.strip()[:90]
-                # Already charged as it went on the wire -- see `_gate`. Not
-                # charged twice for one question.
-                already = getattr(self._injector.state,
-                                  "ask_charged_on_air", False)
-                if not is_repair and not already:
+                if not is_repair:
                     # The sentence is handed over so the ask is charged to the
                     # field it ASKED ABOUT, not the one the state block
                     # nominated. Runs 872/879/885 diverged, and the budget was

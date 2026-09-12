@@ -796,10 +796,6 @@ class CallState:
     utterance: str = ""
     # Fields already charged an answer during the CURRENT caller turn.
     counted_this_turn: set = field(default_factory=set)
-    # Set when the ask was already charged as the question went on the wire,
-    # so the reply-completion path does not charge the same question again.
-    # A reply carries at most one question, so a flag is enough.
-    ask_charged_on_air: bool = False
     # Per-field written re-ask wordings, supplied by the client's workflow.
     # Empty is normal and safe -- see `variants_for`.
     question_variants: dict = field(default_factory=dict)
@@ -900,7 +896,6 @@ class CallState:
         self.answer_me_first = False
         self.utterance = ""
         self.counted_this_turn = set()
-        self.ask_charged_on_air = False
 
     def note_answer_to_last_ask(self, text: str) -> None:
         """Record that the caller has just answered the question we asked.
