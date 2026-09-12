@@ -103,15 +103,25 @@ async def extract(llm, fields: list[str], disqualifiers: list[str],
 
 
 def _is_plausible_money(value) -> bool:
-    """Would a real monthly electricity bill ever be this number?"""
+    """Is this a bill at all, as opposed to a truncated fragment?
+
+    The FLOOR only. The ceiling was removed on 12 Sep: the client's instruction
+    is to believe the figure and never delete it, and a second copy of the old
+    ceiling living here -- after `CallState.note_amount` had already been
+    changed -- is what made run 897 ask the same two questions five times.
+
+    The floor still earns its place. Run 295 stored `monthly_bill: 62` from the
+    fragment "62" after the caller was cut off mid-sentence. A two-digit bill
+    is a truncation, not an answer.
+    """
     try:
         rupees = float(str(value).replace(",", "").replace("₹", "").strip())
     except (TypeError, ValueError):
         # Not a bare figure -- "one lakh", "10-15k". Leave it alone; the
         # synchronous parser in `state.note_amount` is the one that reads
-        # phrases, and it applies the same bounds itself.
+        # phrases.
         return True
-    return amounts.MIN_PLAUSIBLE <= rupees <= amounts.MAX_PLAUSIBLE
+    return rupees >= amounts.MIN_PLAUSIBLE
 
 
 _FALSEY = {False, "false", "no", "none", "not available", "nil", "0"}
@@ -179,19 +189,29 @@ def apply_to_state(state, data: dict, fields: list[str],
             continue
         if key in fields:
             if _is_money_field(key) and not _is_plausible_money(value):
-                # Run 295 stored `monthly_bill: 62`. The caller had said
-                # "60 ... aaa ... 70" and was cut off after "60"; what reached
-                # the extractor was the fragment "62", and `learn` takes
-                # whatever it is handed. `amounts.py` has known since run 286
-                # what a monthly electricity bill can credibly be -- that check
-                # simply was not on this path, only on the synchronous one.
+                # THE CEILING IS GONE. Kept only as the FLOOR it always also
+                # was: run 295's `monthly_bill: 62` came from the fragment "62"
+                # after the caller was cut off mid-sentence, and a two-digit
+                # bill is a truncation rather than an answer.
                 #
-                # Dropped rather than stored: an implausible figure in the lead
-                # record is worse than a null, because null is visibly missing
-                # and 62 looks like an answer. The state block asks the caller
-                # to confirm instead.
-                state.doubted = amounts.parse_amount(str(value))
-                continue
+                # The upper half of this check cost run 897. The client's
+                # instruction on 11 Sep was to believe the figure and never
+                # delete it, and `CallState.note_amount` was changed to match --
+                # but this second copy of the same gate, on the asynchronous
+                # path, was missed. "టూ టూ సిక్స్టీ లాక్స్" reads as 60 lakhs,
+                # over the old Rs 50 lakh ceiling, so it was dropped here on
+                # every turn. The field never entered `known`, stayed in
+                # STILL_NEED, and was asked five times: "ఇవన్నీ చెప్పాను కదా
+                # అప్పుడు" -- I told you all this already.
+                #
+                # Worse than either policy applied whole: the end-of-call
+                # extraction still wrote 260000 into the lead record, so the
+                # figure LOOKED stored while the agent spent the call behaving
+                # as though it had never been said. It also disabled the guard
+                # that refuses to re-ask a known field, which reads `known`.
+                parsed = amounts.parse_amount(str(value))
+                if parsed is None or parsed.rupees < amounts.MIN_PLAUSIBLE:
+                    continue
             # "um" is not part of anybody's name.
             #
             # Run 314 stored `customer_name: "ఉమ్ భాస్కర్"` because the caller
