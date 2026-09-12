@@ -60,7 +60,28 @@ services:
       - app-network
 
   minio:
-    image: minio/minio
+    # quay.io, not Docker Hub, and `pull_policy: missing`.
+    #
+    # 12 Sep: four deploys in a row reported success while the agent kept
+    # running the previous build. Coolify pulls the image-based services BEFORE
+    # stopping the old containers, and that pull died here:
+    #
+    #   Image minio/minio  Error pull access denied for minio/minio,
+    #        repository does not exist or may require 'docker login'
+    #   Image redis:7  Interrupted
+    #   Deployment failed
+    #
+    # One unpullable third-party image aborts the whole pull, so the old
+    # containers are never replaced and our own API never ships. `redis:7` and
+    # `pgvector` were merely interrupted by the abort, so Docker Hub access is
+    # fine in general -- it is this repository that is no longer servable from
+    # there. MinIO publishes to quay.io.
+    #
+    # `pull_policy: missing` is the belt: a registry outage on somebody else's
+    # infrastructure must never again be able to block a deploy of our code
+    # when the image is already on the host.
+    image: quay.io/minio/minio:latest
+    pull_policy: missing
     container_name: minio
     command: server /data --console-address ":9001"
     environment:
