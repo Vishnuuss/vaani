@@ -457,7 +457,28 @@ class ReplyFilter(FrameProcessor):
                 state.misheard_last_turn = True
                 return guardrails.REPAIR_LINE
 
-        # The model writing its OWN "I could not hear you" counts exactly like
+            # CHARGED HERE, where the question becomes real to the caller,
+            # rather than only at `LLMFullResponseEndFrame`.
+            #
+            # The budget was failing on one or two fields every call -- run 897
+            # bill 4 / location 3, run 898 roof 4 / survey 3, run 899 property 3
+            # / location 3 -- and the calls with the most overruns were the
+            # calls with the most double replies. That is the coupling: a reply
+            # that is overtaken never reaches the End frame, so its question is
+            # never charged, and an uncharged ask is one the budget cannot see.
+            # `last_asked` is set there too, so `answered_pending` loses its
+            # footing on exactly those turns.
+            #
+            # The trade is named rather than hidden. A question cut off
+            # mid-word now counts, which run 783 argued against on the grounds
+            # that the caller never heard the whole thing. Being asked the same
+            # question four times is the complaint actually on the table, and
+            # two asks is a generous budget. `charged_this_turn` keeps the two
+            # charging points from counting one question twice.
+            charge = getattr(state, "commit_ask", None)
+            if asked_about and callable(charge):
+                charge(candidate)
+                state.ask_charged_on_air = True
         # the guard writing one: whatever comes back next is an answer to a
         # question we have already failed to understand once. Run 314 apologised
         # for not hearing the city and asked about the property instead.
@@ -848,7 +869,11 @@ class ReplyFilter(FrameProcessor):
                 # abandoned: the agent spends the caller's question budget
                 # apologising for its own interruption.
                 is_repair = said == guardrails.REPAIR_LINE.strip()[:90]
-                if not is_repair:
+                # Already charged as it went on the wire -- see `_gate`. Not
+                # charged twice for one question.
+                already = getattr(self._injector.state,
+                                  "ask_charged_on_air", False)
+                if not is_repair and not already:
                     # The sentence is handed over so the ask is charged to the
                     # field it ASKED ABOUT, not the one the state block
                     # nominated. Runs 872/879/885 diverged, and the budget was
