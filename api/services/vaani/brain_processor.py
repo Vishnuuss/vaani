@@ -426,11 +426,33 @@ class ReplyFilter(FrameProcessor):
             state = self._injector.state
             subject_of = getattr(state, "field_asked_in", None)
             asked_about = subject_of(candidate) if callable(subject_of) else ""
-            if asked_about and asked_about in getattr(state, "known", {}):
+            known = getattr(state, "known", {})
+            counts = getattr(state, "ask_counts", {}) or {}
+            cap = getattr(state, "MAX_ASKS_PER_FIELD", 2)
+            # TWO states end a question's life, and only one of them was being
+            # enforced. Run 898 asked about the roof four times:
+            #
+            #   36:19  BOT   మీకు సొంత రూఫ్ లేదా టెర్రస్ ఉందా?
+            #   36:32  USER  మాకు పెద్ద ఫ్యాక్టరీ ఉందండి ప్రస్తుతానికి
+            #   36:39  BOT   మీకు సొంత రూఫ్ లేదా టెర్రస్ ఉందా?
+            #   36:42  USER  మాకు ఫ్యాక్టరీ ఉంది
+            #   36:44  BOT   మీకు రూఫ్ లేదా టెర్రస్ ఉందా?
+            #
+            # The budget was charged correctly and the field left STILL_NEED
+            # after two. But it was never `known` -- he answered indirectly, by
+            # naming a factory, and never said yes or no -- so the guard below
+            # did not apply and nothing else stopped the model.
+            #
+            # Out of budget is not the same state as answered. A field whose
+            # budget is spent has had every question it is ever going to get.
+            spent = bool(asked_about) and counts.get(asked_about, 0) >= cap
+            if asked_about and (asked_about in known or spent):
                 self._blocked = True
+                why = ("already known "
+                       f"({known.get(asked_about)!r})" if asked_about in known
+                       else f"out of budget ({counts.get(asked_about)} asks)")
                 logger.warning(
-                    f"[answered] {asked_about} is already known "
-                    f"({state.known.get(asked_about)!r}); not asking it again: "
+                    f"[answered] {asked_about} is {why}; not asking it again: "
                     f"{candidate[:60]!r}")
                 state.misheard_last_turn = True
                 return guardrails.REPAIR_LINE
