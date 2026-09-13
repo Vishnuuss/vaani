@@ -137,6 +137,10 @@ class SarvamRealtimeSTTService(STTService):
         # context full of duplicates and took 3.668s on a single turn, against
         # 0.351s on the previous call. Reverted within the hour.
         self._last_final = ""
+        # The last partial actually PUSHED, so a re-score that repeats
+        # itself is not pushed again. Cleared on every final so the next
+        # utterance's first partial is never mistaken for a repeat.
+        self._last_partial = ""
         # Every final already emitted inside the CURRENT utterance.
         #
         # `_last_final` alone remembers only the previous one, so a re-score that
@@ -280,6 +284,32 @@ class SarvamRealtimeSTTService(STTService):
             return
 
         if "partial" in kind:
+            # Only when the text CHANGED.
+            #
+            # Measured with tools/probe_sarvam_realtime.py on a real 38.89s
+            # caller recording: 127 partials for 6 finals. The decoder re-scores
+            # constantly and re-sends what it already said --
+            #
+            #     "నో" / "నో" / "నో నో" / "నో నో" / "నో నో నో" / ""
+            #
+            # -- so roughly half of those frames carry no new words. Every one
+            # of them is still a frame pushed into a pipeline whose downstream
+            # observers all inspect it, on the critical path, while the caller
+            # is mid-sentence.
+            #
+            # Run 969 is why this matters: switching to this service took the
+            # endpoint leg from 0.888s to 1.789s with a spread of 1.720-1.887 --
+            # flat across ten turns, which is a fallback firing every turn, not
+            # anything the caller did. The STT itself is not slow; the same
+            # probe measures speech_end -> final at p50 0.115s against
+            # saarika:v2.5's 0.373s. What changed was frame pressure.
+            #
+            # Empty partials are already dropped above, for a different reason
+            # (they would clear text the aggregator is holding). This drops the
+            # unchanged ones.
+            if text == self._last_partial:
+                return
+            self._last_partial = text
             await self.push_frame(InterimTranscriptionFrame(
                 text, self._user_id, time_now_iso8601(),
                 self._language_enum(), result=msg))
@@ -325,6 +355,7 @@ class SarvamRealtimeSTTService(STTService):
                 self._last_final and text.startswith(self._last_final)
             ) else text
             self._last_final = text
+            self._last_partial = ""
             self._finals.append(text)
             if not emit:
                 return
