@@ -1017,6 +1017,34 @@ class CallState:
         """
         lines = [f"PHASE: {self.phase.value}", f"KNOWN: {self.known or '{}'}"]
 
+        # Every list in this block -- KNOWN, NOT TOLD YET, STILL_NEED -- is a
+        # list of FIELD IDS: property_type, monthly_bill, assessment_agreed.
+        # They are here because listing them is what reliably makes the model
+        # work the checklist, and that same authority is what makes it read one
+        # out when it is short of words.
+        #
+        # Run 961, on a live call, verbatim:
+        #
+        #     BOT:  "assessment_agreed: ఉచితంగా ఒక సైట్ సర్వే చేయించుకుంటారా?"
+        #     USER: "నీకు మెంటర్ రన్నింగ్ ఏమన్నా?"
+        #
+        # The caller heard a database column read aloud in the middle of a
+        # Telugu sentence. Nothing downstream can catch it -- `reply_sanitizer`
+        # matches known bad forms, and every field id of every agent, present
+        # and future, is a candidate.
+        #
+        # So it is said once, at the top, where it governs every list below
+        # rather than any single one of them.
+        # Deliberately does NOT name the section markers. `render` is grepped
+        # for them -- "NOT TOLD YET" not in block is how a caller-facing test
+        # asserts that the checklist has been withdrawn -- and a prohibition
+        # that quotes a marker would keep that marker in the block forever.
+        lines.append(
+            "Every lower_case_name in this block is an internal field id for "
+            "YOU. They are not words. NEVER say one out loud, never read one "
+            "as a label before a sentence, and never spell one out -- the "
+            "caller must never hear an English field name.")
+
         # Run 298. The caller asked what bill was meant, and the agent explained:
         #
         #     "అది మీ ఇంటి నెలవారీ విద్యుత్ బిల్లు"   that is your HOUSE's monthly bill
@@ -1363,8 +1391,27 @@ class CallState:
                 else:
                     how = ("The WORDING is yours: make it follow from what "
                            "they just said.")
+                # The subject is named in WORDS, not as the field id.
+                #
+                # Run 961: the agent said, out loud, on a real call:
+                #
+                #     "assessment_agreed: ఉచితంగా ఒక సైట్ సర్వే చేయించుకుంటారా?"
+                #
+                # The caller's reply was "నీకు మెంటర్ రన్నింగ్ ఏమన్నా?" -- is
+                # something running inside you. `ASSESSMENT_AGREED` was the
+                # loudest token in the last line the model read, in a sentence
+                # telling it what to say, and it read it out as a label.
+                #
+                # Nothing downstream can catch this. `reply_sanitizer` strips
+                # known bad forms and a bare snake_case identifier is not one,
+                # and every field name on every agent is a candidate, so the
+                # fix belongs where the token enters the prompt rather than in
+                # a list of tokens to remove after the fact.
+                subject = nxt.replace("_", " ").upper()
                 lines.append(
-                    f"ASK THEM ABOUT {nxt.upper()} AND NOTHING ELSE. The "
+                    f"ASK THEM ABOUT {subject} AND NOTHING ELSE. That subject "
+                    f'is described here for YOU, not for them: "{nxt}" -- never '
+                    "say that word, or any English field label, out loud. The "
                     f'question to cover is: "{self.questions[nxt]}". You MUST '
                     "stay on that subject even if they dodged it -- moving to a "
                     "different question is the single thing this caller "
