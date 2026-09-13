@@ -92,6 +92,12 @@ STREAM_TYPE = "fast"
 
 # Slowest a dead socket is retried. One attempt per 20 ms audio chunk would turn
 # a Sarvam outage into a flood.
+# How long Sarvam may sit on a finished utterance before sending the final.
+# Its default is 500ms, which stacked on top of our own turn timer; see the
+# note in `_connect`. Low enough to be out of the way, not zero -- the decoder
+# still needs a moment of silence to know a word has ended.
+_SILENCE_MS = 100
+
 _RECONNECT_MIN_INTERVAL_SECS = 2.0
 
 
@@ -183,6 +189,32 @@ class SarvamRealtimeSTTService(STTService):
             "stream_type": self._stream_type,
             "encoding": "linear16",
             "sample_rate": str(self.sample_rate or 8000),
+            # STOP SARVAM WAITING FOR THE END OF THE TURN.
+            #
+            # The server runs its own VAD and, at the default
+            # `silence_duration_ms=500`, holds the final transcript for half a
+            # second after the caller stops -- "silence (ms) marking
+            # end-of-turn", per Sarvam's realtime docs. Our turn is ended by
+            # `SpeechTimeoutUserTurnStopStrategy` on top of that, so the two
+            # waits STACK.
+            #
+            # Runs 969 and 970 are what stacking costs. Endpoint went 0.888s ->
+            # 1.789s -> 1.824s with a spread of 1.720-1.974 across 15 turns, and
+            # the STT metric read 0.654-0.657 on nearly every turn. A number
+            # constant to three decimals is not a measurement, it is a fixed
+            # wait, and this is the wait: Sarvam's 500ms plus its own
+            # processing. Both attempts were reverted without finding it.
+            #
+            # Vapi's guidance names the same trap: "layering a wait timer over
+            # semantic endpointing doesn't add safety; it adds latency and
+            # overrides the better signal."
+            #
+            # So the server is told to finalise almost immediately. This does
+            # NOT make Sarvam decide turns -- it makes it stop delaying words,
+            # which is what this module's own header asks of it: "this service
+            # reports words. It does not decide turns." Turn-taking stays with
+            # the local detector and the timer, exactly as before.
+            "silence_duration_ms": str(_SILENCE_MS),
         })
         try:
             self._ws = await websockets.connect(
