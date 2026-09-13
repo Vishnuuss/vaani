@@ -104,21 +104,6 @@ NUMERALS: dict[str, float] = {
 # its upper figure. The same trap broke the tokeniser above.
 RANGE_TOKENS = {"to", "టు", "నుంచి", "నుండి", "మధ్య", "-", "–"}
 
-# An explicit zero. There is no scale word for it and it is below the bare-figure
-# floor, so before this existed every form of it parsed as None -- meaning "no
-# amount in this sentence", which is the opposite of what the caller said.
-#
-# Run 939: asked for his monthly current bill the caller said "జీరో". Nothing
-# was stored, `monthly_bill` stayed in `still_need`, and he was asked the same
-# question again three turns later. The field was also the only one missing
-# from the lead record -- not null, absent -- because a value that was never
-# recorded has nothing to write.
-#
-# He may have no connection, or the meter may be in someone else's name, or the
-# place may not be his to pay for. All of those are worth more to a vendor than
-# a blank, and none are improved by asking him twice.
-ZERO_TOKENS = {"జీరో", "సున్నా", "సున్న", "zero", "nil", "నిల్", "0"}
-
 # A bill is monthly money. These say the caller is talking about something else.
 NOT_MONEY = re.compile(
     r"(గంట|oclock|o'clock|బజే|కిలోవాట్|kilowatt|\bkw\b|యూనిట్|unit|"
@@ -346,11 +331,6 @@ def parse_amount(text: str) -> Amount | None:
                 continue
             if v >= 500:
                 return Amount(rupees=v)
-        # An explicit zero is not a stray numeral -- it is the whole answer.
-        # The 500 floor above stays exactly where it is; it guards against a
-        # passing "2", and nobody says "zero" in passing to a bill question.
-        if any(tok in ZERO_TOKENS for tok in tokens):
-            return Amount(rupees=0)
         return None
 
     if len(found) >= 2 and any(t in RANGE_TOKENS for t in tokens):
