@@ -53,6 +53,7 @@ from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggr
 from api.services.pipecat.speculation.coordinator import SpeculationCoordinator
 from api.services.pipecat.speculation.gate import SpeculativeLLMGate
 from api.services.pipecat.speculation.probe import SpeculationProbe
+from api.services.vaani import client_reference
 from api.services.vaani import latency as vaani_latency
 from api.services.vaani.barge_in import apply_barge_in_gate
 from api.services.vaani.partial_response import PartialResponder
@@ -172,8 +173,14 @@ def compile_vaani_system_prompt(workflow_graph, *, workflow_name: str) -> str:
     brief = VaaniBrief(
         business=workflow_name or "",
         questions=questions,
-        # The editor's text is the business layer, verbatim.
-        products=getattr(start_node, "prompt", "") or "",
+        # The editor's text is the business layer -- but only the half the
+        # agent needs on EVERY turn. Anything under the client's own
+        # "## Reference" heading is consulted on demand instead of compiled
+        # in; see client_reference.py for what that is worth. A prompt with
+        # no such heading is passed through whole, so an agent that has not
+        # been migrated is unaffected.
+        products=client_reference.split(
+            getattr(start_node, "prompt", "") or "")[0],
     )
     return compile_vaani_prompt(brief)
 
@@ -232,6 +239,12 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
 
     brief = VaaniBrief(business=workflow_name or "", questions=questions)
     injector = StateInjector(brief, context, system_prompt)
+    # The half of Layer 3 that was compiled OUT of the system prompt, parsed
+    # once per call and consulted per turn. Parsed here rather than in
+    # `render()` because the text is fixed for the whole call and the regexes
+    # are not free; `render()` runs on every turn.
+    injector.state.reference = client_reference.parse(
+        client_reference.split(getattr(start_node, "prompt", "") or "")[1])
     return injector, ReplyFilter(injector, filler_state=filler_state,
                                  in_flight=in_flight)
 

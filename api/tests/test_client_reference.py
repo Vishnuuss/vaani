@@ -119,3 +119,54 @@ def test_an_over_long_row_is_skipped_rather_than_read_out():
                           '"' + ("పొడవు " * 400) + '"')
     rows = cref.parse(cref.split(huge)[1])
     assert cref.lookup(rows, "బ్యాటరీ కావాలా?") == []
+
+
+# ------------------------------------------------------- the wiring itself
+
+def test_the_state_block_serves_the_row_on_the_turn_it_is_asked_for():
+    """Parsing is useless if nothing consults it.
+
+    This is the lesson of the 2026-09-10 defect, where `extractor.py` was
+    wired into the simulator only and `StateInjector` never called it, so the
+    agent asked question one forever. A module with passing unit tests and no
+    caller is the same bug.
+    """
+    from api.services.vaani.state import CallState
+
+    s = CallState()
+    s.required_fields = ["location"]
+    s.questions = {"location": "మీరు ఏ ఏరియాలో ఉంటున్నారు?"}
+    s.reference = cref.parse(cref.split(PROMPT)[1])
+
+    s.last_user_text = "సబ్సిడీ ఎంత వస్తుంది?"
+    block = s.render()
+    assert "PM Surya Ghar" in block, "the row never reached the state block"
+
+    # and not a second time in the same call
+    again = s.render()
+    assert again.count("PM Surya Ghar") == 0, "the same answer was handed twice"
+
+
+def test_an_ordinary_turn_adds_nothing_to_the_block():
+    """Where the saving actually comes from."""
+    from api.services.vaani.state import CallState
+
+    s = CallState()
+    s.required_fields = ["location"]
+    s.questions = {"location": "మీరు ఏ ఏరియాలో ఉంటున్నారు?"}
+    s.reference = cref.parse(cref.split(PROMPT)[1])
+
+    s.last_user_text = "హైదరాబాద్."
+    block = s.render()
+    assert "REFERENCE" not in block
+
+
+def test_an_agent_with_no_reference_section_has_an_empty_block_addition():
+    from api.services.vaani.state import CallState
+
+    s = CallState()
+    s.required_fields = ["location"]
+    s.questions = {"location": "ఏ ఏరియా?"}
+    s.reference = cref.parse(cref.split("# Plain agent\n\n## Questions\nAsk.")[1])
+    s.last_user_text = "సబ్సిడీ ఎంత?"
+    assert "REFERENCE" not in s.render()

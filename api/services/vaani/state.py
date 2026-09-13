@@ -19,7 +19,8 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 
-from api.services.vaani import amounts, booking, coach, completeness
+from api.services.vaani import (amounts, booking, client_reference, coach,
+                                completeness)
 from api.services.vaani.corrections import is_correction
 
 
@@ -848,6 +849,12 @@ class CallState:
     # re-injecting the same tactic on a caller who did not take it the
     # first time is the prompt itself pushing a second time.
     coached: set = field(default_factory=set)
+    # Layer 3's reference rows, parsed once from the client's own config. See
+    # client_reference.py: the FAQ and the scheme text cost 8,904 tokens a turn
+    # on MB Solar and are wanted on one or two turns of a call.
+    reference: list = field(default_factory=list)
+    # Row titles already given, so the same answer is not handed over twice.
+    referenced: set = field(default_factory=set)
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -1532,5 +1539,14 @@ class CallState:
         for line in coach.coach(self.last_user_text, self.coached):
             lines.append(line)
             self.coached.add(line.split("(", 1)[1].split(")", 1)[0])
+        # The client's own reference material, on the same terms and for the
+        # same reason. `coach` carries tactics that generalise across
+        # industries; this carries the facts that do not -- the subsidy
+        # figures, the warranty, what happens after they register. Both are
+        # charged only on the turn the caller reaches for them.
+        for line in client_reference.lookup(self.reference, self.last_user_text,
+                                            self.referenced):
+            lines.append(line)
+            self.referenced.add(line.split("(", 1)[1].split(")", 1)[0])
         lines.append(f"TURN: {self.turn}   CALL_ELAPSED: {self.elapsed_s}s")
         return "\n".join(lines)
