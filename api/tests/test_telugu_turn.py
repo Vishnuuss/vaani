@@ -203,15 +203,29 @@ def test_losing_both_models_disables_rather_than_breaks(tmp_path):
     assert feed(a, silence(2.5), False) == EndOfTurnState.COMPLETE
 
 
+# Re-baselined 13 Sep 2026, when the forest was replaced.
+#
+# The previous values (0.1367, 0.1498, 0.0585, 0.0729) belong to the model
+# trained on `turnstops.jsonl` -- 443 rows in this checkout, every one
+# `was_turn_end: True`. Scored against real negatives for the first time it cut
+# callers off 6.5% of the time, over `latency_budget.yaml`'s 2% bar, and it had
+# never carried a cut-off number at all because it was trained with nothing to
+# measure one against.
+#
+# The forest here is retrained on `turnstops_real.jsonl`: 1,707 completions and
+# 1,243 REAL negatives from 647 calls, split by call. 1.5% false cutoffs at
+# 10.0% of turns endable early, threshold 0.83 (was 0.97), init 0.36 (was 1.41).
+# The scores move a long way because it IS a different detector -- which is what
+# this test exists to make impossible to do quietly.
 @pytest.mark.parametrize("features,expected", [
     ([0.1257, -0.1321, 0.6404, 0.1049, -0.5357, 0.3616, 1.304, 0.9471, -0.7037,
-      -1.2654, -0.6233, 0.0413, -2.325, -0.2188, -1.2459, -0.7323], 0.13668883960378564),
+      -1.2654, -0.6233, 0.0413, -2.325, -0.2188, -1.2459, -0.7323], 0.8728821344139501),
     ([-0.5443, -0.3163, 0.4116, 1.0425, -0.1285, 1.3665, -0.6652, 0.3515, 0.9035,
-      0.094, -0.7435, -0.9217, -0.4577, 0.2202, -1.0096, -0.2092], 0.14981838784473483),
+      0.094, -0.7435, -0.9217, -0.4577, 0.2202, -1.0096, -0.2092], 0.20313926202994223),
     ([-0.1592, 0.5408, 0.2147, 0.3554, -0.6538, -0.1296, 0.784, 1.4934, -1.2591,
-      1.5139, 1.3459, 0.7813, 0.2645, -0.3139, 1.458, 1.9603], 0.05847060851869748),
+      1.5139, 1.3459, 0.7813, 0.2645, -0.3139, 1.458, 1.9603], 0.8664036687805489),
     ([1.8016, 1.3151, 0.3574, -1.2083, -0.0045, 0.6565, -1.2884, 0.3951, 0.4299,
-      0.696, -1.1841, -0.6617, -0.4364, -1.1698, 1.7394, -0.4959], 0.07288004130433232),
+      0.696, -1.1841, -0.6617, -0.4364, -1.1698, 1.7394, -0.4959], 0.6124988277193643),
 ])
 def test_the_forest_scores_exactly_what_it_was_exported_to_score(features, expected):
     """Golden values. A silent change here is a silently different detector."""

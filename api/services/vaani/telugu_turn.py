@@ -392,8 +392,10 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
         logger.info(
             f"[telugu-turn] forest enabled, {len(forest.trees)} trees, "
             f"threshold {self._params.threshold:.2f} "
-            "(measured 7 Sep on REAL negatives: 6.5% false cutoffs, "
-            "12.4% endable early -- NOT the 43.9%/2% this used to claim)"
+            f"(retrained on real negatives 13 Sep: "
+            f"{float(blob.get('false_cutoff_rate') or 0) * 100:.1f}% false "
+            f"cutoffs, {float(blob.get('early_end_rate') or 0) * 100:.1f}% "
+            "endable early. The one-class model this replaced measured 6.5%)"
         )
         return True
 
@@ -417,7 +419,11 @@ class TeluguTurnAnalyzer(BaseTurnAnalyzer):
             self._params.threshold = 0.84     # trained default, if the file omits it
         logger.info(
             f"[telugu-turn] enabled, threshold {self._params.threshold:.2f} "
-            f"(trained on 1,393 clips from 396 real calls)"
+            f"(retrained on real negatives 13 Sep: "
+            f"{float(w.get('false_cutoff_rate') or 0) * 100:.1f}% false "
+            f"cutoffs, {float(w.get('early_end_rate') or 0) * 100:.1f}% "
+            "endable early, from "
+            f"{int(w.get('n_examples') or 0):,} clips across 647 calls)"
         )
         return True
 
