@@ -82,7 +82,8 @@ def _strip_ack(text: str) -> str:
 def _normalise(text: str) -> str:
     """Punctuation and spacing are not what makes two replies different."""
     return re.sub(r"[^\wఀ-౿]+", "", (text or "").lower())
-from api.services.vaani.state import CallState, _is_question, echoes_agent
+from api.services.vaani.state import (CallState, _is_presence_check,
+                                      _is_question, echoes_agent)
 
 
 class StateInjector(FrameProcessor):
@@ -238,7 +239,16 @@ def _end_is_earned(state) -> bool:
     #
     # Agreeing to a site survey is not agreeing to stop talking. A question on
     # the line is a caller still engaged.
-    if _is_question(getattr(state, "last_user_text", "") or ""):
+    # ... unless the only thing he asked was whether anyone is still there.
+    #
+    # Runs 981 and 982. "హలో, కాల్‌లో ఉన్నారా ఇంకా?" carries the interrogative
+    # clitic and asks for nothing. Treating it as engagement made the refusal
+    # self-sustaining: the agent's silence produced the "hello", the "hello"
+    # renewed the refusal, and run 982 ran 171s for business finished at 90.
+    # A presence check only removes this block -- the reasons below still have
+    # to be met, so it can never hang up on its own.
+    said = getattr(state, "last_user_text", "") or ""
+    if _is_question(said) and not _is_presence_check(said):
         return False
 
     return bool(

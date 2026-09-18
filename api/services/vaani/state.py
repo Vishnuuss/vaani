@@ -129,6 +129,73 @@ def echoes_agent(text: str, spoken: list) -> bool:
     return False
 
 
+# --- presence checks ---------------------------------------------------------
+# "హలో?", "కాల్‌లో ఉన్నారా?", "are you there?" -- the noise a caller makes when
+# nobody has spoken. Every one of them carries an interrogative, so
+# `_is_question` says True, and it is not a question: it asks for nothing and
+# there is nothing to answer.
+#
+# Runs 981 and 982 (18 Sep) are what this costs. The business was finished --
+# the advisor call agreed, "సరే", "బాయ్" -- and `_end_is_earned` refuses to
+# hang up while a question is on the line (run 882's fix, which is right). So
+# the dead air produced "హలో, కాల్‌లో ఉన్నారా ఇంకా?", which renewed the refusal,
+# which produced more dead air. Run 982 ran 171s for a call whose business was
+# done at about 90, and the caller had to hang up himself.
+#
+# The phrases only, not the whole sentence: a caller who opens with "హలో" and
+# then asks something real is asking something real.
+_PRESENCE_PHRASE = re.compile(
+    # `[\s‌‍]` and not `\s`: the STT writes కాల్‌లో with a ZWNJ
+    # holding the two halves together, which is not whitespace, and a `\s*`
+    # here matched neither the joined nor the spaced spelling.
+    r"(హలో|హలొ|హెలో|అలో"
+    r"|(కాల్|లైన్|ఫోన్)[\s‌‍]*(లో)?[\s‌‍]*ఉన్నా(రా|వా|రు|డా)"
+    r"|ఉన్నారా\s*(అండి|సార్|మేడం)?\s*$"
+    r"|విని(పిస్తుంద|పిస్తోంద|స్తున్నార|పించ)\w*"
+    r"|వినబడు\w*"
+    r"|हैलो|हलो|सुन\s*रहे"
+    r"|hello+|hallo|are\s+you\s+(still\s+)?(there|on\s+the\s+(call|line))"
+    r"|you\s+there|can\s+you\s+hear\s+(me)?|still\s+there)",
+    re.IGNORECASE)
+
+# What is left over once the presence phrases are gone. Punctuation has to go
+# with them: `_QUESTION_WORDS` matches a bare "?", so the question mark the
+# caller put after "హలో" would answer for the sentence it was attached to.
+_PRESENCE_RESIDUE = re.compile(r"[\s?!.,;:।॥‌‍-]+")
+
+# Words that survive the phrase and are not questions, but end on the AA sign
+# and so trip `_QUESTION_PARTICLE`, whose whole rule is "ends in ా".
+# "ఇంకా" is *still/yet*, "అక్కా" is *sister* -- an adverb and a vocative. Run
+# 982's real lines are "కాల్‌లో ఉన్నారా ఇంకా?" and "హలో, అక్కా, కాల్‌లో
+# ఉన్నావా?", and without this both read as questions on the strength of one
+# vowel sign.
+_PRESENCE_FILLER = re.compile(
+    r"(?<![\wఀ-౿])"
+    r"(ఇంకా|ఇంక|మరి|ఇప్పుడు|అండి|సార్|మేడం|అక్కా|అన్నా|బాబు|నేను|మీరు|ఇంకానా)"
+    r"(?![\wఀ-౿])")
+
+
+def _is_presence_check(text: str) -> bool:
+    """Is this only the caller asking whether anyone is still on the line?
+
+    True when the text carries a presence phrase AND nothing that survives
+    removing it is a question. `note_user_said` accumulates a whole turn into
+    `last_user_text`, so this routinely sees "అలాగేనండి. బాయ్. హలో? హలో,
+    కాల్‌లో ఉన్నారా ఇంకా?" rather than one clean sentence -- the leftover
+    "అలాగేనండి. బాయ్." is not a question, so the turn reads as what it is.
+
+    It removes a BLOCK on ending; it is never a reason to end. `_end_is_earned`
+    still needs an independent reason.
+    """
+    t = (text or "").strip()
+    if not t or not _PRESENCE_PHRASE.search(t):
+        return False
+    rest = _PRESENCE_PHRASE.sub(" ", t)
+    rest = _PRESENCE_FILLER.sub(" ", rest)
+    rest = _PRESENCE_RESIDUE.sub(" ", rest).strip()
+    return not _is_question(rest)
+
+
 def _is_question(text: str) -> bool:
     t = (text or "").strip()
     if not t:
@@ -1128,7 +1195,21 @@ class CallState:
         # `appointment_iso`: that branch already answers him first AND quotes
         # his exact words into the instruction, which is stronger than the
         # generic branch below. Gating it would be a downgrade.
-        he_asked = _is_question(self.last_user_text)
+        # A presence check is not a question, however interrogative it sounds.
+        #
+        # Run 982: "నాకు పిల్లలు లేరు. హలో? నేను ఇంకా కాల్‌లో ఉన్నారా?" -- the
+        # answer and the "hello" arrive as ONE accumulated turn. The "hello"
+        # made `he_asked` true, the branch below withdrew the checklist, and the
+        # agent spent its turn confirming it was still on the call while the
+        # answer it had just been given went unheard. He had to repeat himself:
+        # "నేను చెప్పింది మీకు వినిపించిందా?" -- did you hear what I said?
+        #
+        # Suppressing the checklist for a real question is this file's most
+        # valuable rule (runs 218, 872, 882) and is untouched. A caller asking
+        # whether anyone is there is asking for the conversation to CONTINUE,
+        # and continuing it is the checklist's job.
+        he_asked = (_is_question(self.last_user_text)
+                    and not _is_presence_check(self.last_user_text))
 
         if self.must_end:
             lines.append(f"STILL_NEED: [] -- STOP. {self.end_reason} "
