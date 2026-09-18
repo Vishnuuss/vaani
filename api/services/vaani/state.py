@@ -40,6 +40,12 @@ class Phase(Enum):
 #
 # The statement forms end in a different vowel sign (వస్తుంది "it comes"),
 # so the ending is what separates them.
+# How many turns an answered field stays off the checklist while the async
+# extractor catches up. Two, not one, because run 986 re-asked the city two
+# turns after it was answered; and not more, because a field that never reaches
+# `known` has to come back or a dodged question is silently dropped.
+_ANSWERED_GRACE_TURNS = 2
+
 _QUESTION_WORDS = re.compile(
     r"(\?|ఎంత|ఎక్కడ|ఎప్పుడు|ఎలా|ఏమిటి|ఏంటి|ఏమి|ఎందుకు|ఎవరు|ఎన్ని|ఏది|ఏవి|"
     r"\b(what|when|where|how|why|which|who|can|do|does|is|are)\b)",
@@ -823,6 +829,24 @@ class CallState:
     # Deliberately NOT a rule about locations. The same failure asked his name
     # twice and the site survey three times on that one call.
     answered_pending: set = field(default_factory=set)
+    # Turns each pending field has been carried, so the suppression can outlive
+    # exactly one turn without becoming permanent.
+    #
+    # The comment above says the suppression lasts one turn because "if the
+    # extractor confirms it, it moves to `known`". That handover never happened
+    # on a phone call: `vaani/extractor.py` is imported by the simulator alone,
+    # so until `_learn_from_engine` was wired on 18 Sep the only field that
+    # could ever reach `known` was a money amount. Every other answer was
+    # suppressed for one turn and then asked again.
+    #
+    # With the extractor connected the handover works, but it is asynchronous
+    # and lands a turn late, leaving a window where the field is no longer
+    # pending and not yet known. Run 986 is that window: he said "హైదరాబాద్",
+    # was asked his city again two turns later, and the same happened to the
+    # roof. So the field is carried until `known` catches up, and dropped after
+    # `_ANSWERED_GRACE_TURNS` if it never does -- a dodged question still comes
+    # back, bounded by the two-ask budget as before.
+    answered_age: dict = field(default_factory=dict)
     # How many times the CALLER has answered each field, and what he actually
     # said. Counted on HIS turn, not ours.
     #
@@ -985,12 +1009,25 @@ class CallState:
         the same question twice in a row is worse than carrying a null for one
         more turn.
 
-        Cleared first, every turn, so the suppression lasts exactly one turn.
-        If the extractor confirms the value it moves to `known` and never comes
-        back; if it finds nothing, the field returns next turn and the two-ask
-        budget still bounds it.
+        Carried, not cleared. A field stays suppressed until the extractor
+        confirms it into `known`, or until `_ANSWERED_GRACE_TURNS` have passed
+        and it plainly never will -- at which point it returns and the two-ask
+        budget bounds it exactly as before. See `answered_age` for why one turn
+        was not enough once the extractor was actually connected.
         """
-        self.answered_pending = set()
+        for pending in list(self.answered_pending):
+            if pending in self.known:
+                # The extractor caught up. `known` takes over the suppression
+                # permanently and the bookkeeping is no longer needed.
+                self.answered_pending.discard(pending)
+                self.answered_age.pop(pending, None)
+                continue
+            age = self.answered_age.get(pending, 0) + 1
+            if age > _ANSWERED_GRACE_TURNS:
+                self.answered_pending.discard(pending)
+                self.answered_age.pop(pending, None)
+            else:
+                self.answered_age[pending] = age
         field_asked = self.last_asked
         if not field_asked or field_asked in self.known:
             return
