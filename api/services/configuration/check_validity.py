@@ -49,6 +49,7 @@ class UserConfigurationValidator:
             ServiceProviders.CARTESIA.value: self._check_cartesia_api_key,
             ServiceProviders.DOGRAH.value: self._check_dograh_api_key,
             ServiceProviders.SARVAM.value: self._check_sarvam_api_key,
+            ServiceProviders.SONIOX.value: self._check_soniox_api_key,
             ServiceProviders.SPEECHMATICS.value: self._check_speechmatics_api_key,
             ServiceProviders.CAMB.value: self._check_camb_api_key,
             ServiceProviders.AWS_BEDROCK.value: self._check_aws_bedrock_api_key,
@@ -361,6 +362,15 @@ class UserConfigurationValidator:
 
     def _check_sarvam_api_key(self, model: str, api_key: str) -> bool:
         return True
+
+    def _check_soniox_api_key(self, model: str, api_key: str) -> bool:
+        # Format only, as with Sarvam above. Soniox authenticates inside the
+        # transcription websocket handshake, not on a REST endpoint, and this
+        # method is synchronous -- an unmapped provider falls through
+        # `_check_api_key` to a bare `return False`, which surfaces as
+        # "Invalid soniox API key" on a 422 and reads like a bad key rather
+        # than a missing map entry.
+        return bool(api_key and str(api_key).startswith("snx_"))
 
     def _check_openrouter_api_key(self, model: str, api_key: str) -> bool:
         return True

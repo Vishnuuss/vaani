@@ -325,6 +325,7 @@ INWORLD_PROVIDER_MODEL_CONFIG = provider_model_config(
     provider_docs_url="https://docs.inworld.ai/tts/tts",
 )
 SARVAM_PROVIDER_MODEL_CONFIG = provider_model_config("Sarvam")
+SONIOX_PROVIDER_MODEL_CONFIG = provider_model_config("Soniox")
 CAMB_PROVIDER_MODEL_CONFIG = provider_model_config("Camb.ai")
 RIME_PROVIDER_MODEL_CONFIG = provider_model_config("Rime")
 GOOGLE_CLOUD_PROVIDER_MODEL_CONFIG = provider_model_config("Google Cloud")
@@ -1641,6 +1642,47 @@ class SarvamSTTConfiguration(BaseSTTConfiguration):
                 "saaras:v3": SARVAM_STT_LANGUAGES_V3,
             },
         },
+    )
+
+
+SONIOX_STT_MODELS = ["stt-rt-v5", "stt-rt-v5-turns"]
+SONIOX_STT_LANGUAGES = ["te-IN", "hi-IN", "ta-IN", "kn-IN", "en-IN", "multi"]
+
+
+@register_stt
+class SonioxSTTConfiguration(BaseSTTConfiguration):
+    """Soniox streaming STT, with the turn decision chosen by model name.
+
+    Registering the provider enum alone is not enough. `resolve.py`'s
+    `_build_section_from_override` looks the provider up in REGISTRY and returns
+    None when it misses, and that None surfaces much later and much less
+    clearly, as "Pipeline legacy configuration is incomplete" on a 422. A
+    per-workflow override cannot select a provider that has no class here.
+    """
+
+    model_config = SONIOX_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.SONIOX] = ServiceProviders.SONIOX
+    model: str = Field(
+        default="stt-rt-v5",
+        description=(
+            "Soniox realtime model, and the turn-taking mode with it. "
+            "stt-rt-v5 leaves Soniox endpointing OFF, so Silero and the Telugu "
+            "model keep owning the turn and Soniox is only asked to flush on "
+            "VAD stop -- measured 307ms p50 to final tokens against Sarvam's "
+            "0.373-0.45s. stt-rt-v5-turns hands the turn decision to Soniox's "
+            "semantic endpointing, measured 0.480s with 36 of 37 detected ends "
+            "under 0.6s."
+        ),
+        json_schema_extra={"examples": SONIOX_STT_MODELS},
+    )
+    language: str = Field(
+        default="te-IN",
+        description=(
+            "Primary BCP-47 code. Sent as a language HINT, never a "
+            "restriction: these callers code-switch and speak numbers in "
+            "English, so language_hints_strict is deliberately left off."
+        ),
+        json_schema_extra={"examples": SONIOX_STT_LANGUAGES},
     )
 
 
