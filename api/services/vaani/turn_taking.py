@@ -176,12 +176,30 @@ def create_user_turn_stop_strategies(
     and five of run 863's twenty turns became replies to a single syllable.
     Wrapping the result covers whichever detector is configured, now and later.
 
-    External turns are deliberately NOT wrapped: another system owns turn
-    boundaries there and second-guessing it from inside would be a bug.
+    External turns USED to be left unwrapped, on the reasoning that another
+    system owns the boundary and second-guessing it from inside would be a bug.
+    Runs 977 and 978 on 18 Sep cost us that argument. Soniox's endpointing is
+    genuinely the fastest thing measured here -- endpoint p50 0.439s, 10 of 13
+    turns under 0.6s, against a 0.906s floor that 69 consecutive turns could not
+    break -- and unwrapped it produced both failures the guard exists to stop:
+
+        USER : ఆ, ప్రస్తుతానికి అయితే మాది—     <- turn ended mid-sentence
+        USER : అమరావతి అండి, మాది.
+        BOT  : మంచిది, మీ కరెంట్ బిల్లు నెలకి ఎంత వస్తుంది?
+        BOT  : ఇల్లు, అపార్ట్‌మెంటా, లేదా కమర్షియల్ ప్లేసా?   <- answered twice
+
+    and the caller saying so outright: "ఇంకా మాట్లాడేది కంప్లీట్ చేయలేదు కదా".
+
+    The guard does not second-guess WHETHER the turn ended. It holds a turn
+    whose whole content is a thinking noise, which is knowledge about Telugu
+    that no STT vendor has and that this project mined from 2,097 real calls.
+    An external detector needs it exactly as much as a local one does -- more,
+    since it has no Telugu backchannel lexicon at all.
     """
 
     if uses_external_turns:
-        return [ExternalUserTurnStopStrategy()]
+        return apply_filler_guard(
+            [ExternalUserTurnStopStrategy()], run_configs, in_flight=in_flight)
 
     return apply_filler_guard(
         _build_user_turn_stop_strategies(run_configs), run_configs,

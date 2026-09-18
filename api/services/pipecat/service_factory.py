@@ -255,6 +255,7 @@ def _elevenlabs_realtime_stt_host(base_url: str) -> str:
 #                     tools/probe_soniox_stream.py for the continuous rerun.
 SONIOX_MODEL = "stt-rt-v5"
 SONIOX_TURNS_MODEL = "stt-rt-v5-turns"
+SONIOX_TURNS_SENSITIVITY = -0.4
 
 
 def soniox_owns_turns(model: str | None) -> bool:
@@ -460,13 +461,25 @@ def create_stt_service(
             # transliterated so no pattern matched, and the caller was never
             # disqualified as a result.
             settings.context = ", ".join(keyterms)
-        # No endpoint knobs are set, in either mode, and that is deliberate.
-        # max_endpoint_delay_ms measured IDENTICAL at 500 and 2000 across 8k
-        # and 16k -- 0.480s either way -- because the semantic decision fires
-        # long before the cap, so the cap is dead config that would only look
-        # like a tuning lever. level=3 with sensitivity=0.8 left the median at
-        # 0.480s and spread the range 0.060-1.140s: variance, not speed, and
-        # variance is how cut-offs get bought.
+        if owns_turns:
+            # `endpoint_sensitivity` is the one knob that binds, and it had
+            # only ever been swept UPWARD. max_endpoint_delay_ms measured
+            # identical at 500 and 2000 across 8k and 16k -- 0.480s either way
+            # -- because the semantic decision fires long before the cap, so
+            # the cap is dead config. level=3 with sensitivity=+0.8 left the
+            # median at 0.480s and spread the range 0.060-1.140s: variance, not
+            # speed.
+            #
+            # Negative is the untried direction and the documented one: it
+            # delays finalisation for frequent pausers, which is exactly what a
+            # Telugu caller mid-thought is. Runs 977 and 978 both show
+            # endpoints firing BEFORE speech ended, -0.208s and -0.177s, so the
+            # fix is patience rather than a ceiling.
+            #
+            # -0.4 and not -1.0 on purpose: the only reason to be in this mode
+            # is the 0.439s p50, and spending all of it back leaves nothing
+            # over the 0.906s floor it replaces.
+            settings.endpoint_sensitivity = SONIOX_TURNS_SENSITIVITY
         return SonioxSTTService(
             api_key=user_config.stt.api_key,
             sample_rate=audio_config.transport_in_sample_rate,

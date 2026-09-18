@@ -187,7 +187,7 @@ def compile_vaani_system_prompt(workflow_graph, *, workflow_name: str) -> str:
 
 def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
                       workflow_name: str, filler_state=None,
-                      in_flight=None):
+                      in_flight=None, engine=None):
     """Build Vaani's (StateInjector, ReplyFilter) from a Dograh workflow.
 
     A Dograh single-prompt agent already carries what a Vaani `Brief` needs: the
@@ -238,7 +238,7 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
         questions.append({"field": name, "ask": ask or name})
 
     brief = VaaniBrief(business=workflow_name or "", questions=questions)
-    injector = StateInjector(brief, context, system_prompt)
+    injector = StateInjector(brief, context, system_prompt, engine=engine)
     # The half of Layer 3 that was compiled OUT of the system prompt, parsed
     # once per call and consulted per turn. Parsed here rather than in
     # `render()` because the text is fixed for the whole call and the regexes
@@ -1226,6 +1226,11 @@ async def _run_pipeline_impl(
                 workflow_name=getattr(workflow, "name", "") or "",
                 filler_state=filler_state,
                 in_flight=reply_in_flight,
+                # The return leg of `attach_vaani_state`, which was one-way.
+                # Dograh's extractor fills `_gathered_context` and nothing ever
+                # read it back, so `known` stayed empty on every real call and
+                # the checklist re-asked what the caller had already answered.
+                engine=engine,
             )
             # Warm the provider's prompt cache while the greeting plays. The
             # first turn of a call costs an extra 0.393s at the median and over

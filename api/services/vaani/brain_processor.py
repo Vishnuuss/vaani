@@ -88,10 +88,13 @@ from api.services.vaani.state import CallState, _is_question, echoes_agent
 class StateInjector(FrameProcessor):
     """Keeps the live state block at the end of the LLM context."""
 
-    def __init__(self, brief: Brief, context, system_prompt: str):
+    def __init__(self, brief: Brief, context, system_prompt: str, engine=None):
         super().__init__()
         self._context = context
         self._system_prompt = system_prompt
+        # The engine that owns Dograh's variable extraction. See
+        # `_learn_from_engine`: without it, `known` stays empty all call.
+        self._engine = engine
         # Every number the agent is ALLOWED to say, taken from its own compiled
         # prompt -- which contains the client's knowledge base. Computed once
         # per call rather than per turn: the prompt does not change mid-call,
@@ -146,10 +149,58 @@ class StateInjector(FrameProcessor):
         # lands a turn late, so without this the state block still lists the
         # field he just answered and the model dutifully asks again. Run 853.
         self.state.note_answer_to_last_ask(text)
+        self._learn_from_engine()
         self.state.advance()
         if result.any:
             logger.info(f"triage: {result}")
         self._refresh()
+
+    def _learn_from_engine(self) -> None:
+        """Copy Dograh's extracted variables into `known`. The missing half.
+
+        `attach_vaani_state` already runs the other way: the engine reads
+        Vaani's deterministic facts into the lead record. Nothing ever came
+        back, and `vaani/extractor.py` -- the only other writer of `known` --
+        is imported by the simulator alone. So on a real call the ONLY field
+        that could ever become known was a money amount, through
+        `note_amount`.
+
+        Everything downstream depends on `known`, and all of it was running
+        blind: `still_need` listed every field on every turn, `advance()` could
+        never leave QUALIFYING, and the already-answered guard could only fire
+        on a bill. The state block then re-pinned an answered question as the
+        last and loudest thing in the context, which is the mechanism behind
+        both complaints -- the agent asking again, and the agent ignoring what
+        was actually said in favour of its checklist.
+
+        Run 977 is the proof it was working and simply not connected: the
+        record came back with location "Hyderabad", roof_available true and
+        customer_name "Nitesh" extracted, while the agent went on interrogating
+        the caller until he said "నేను ఇన్స్టాల్ చేస్తారా చేయరా అడగలేదు".
+
+        Deliberately additive. It never clears a field and never overwrites one
+        Vaani established itself, because `note_amount` and the booking parser
+        are trusted over the LLM extractor -- that precedence is the whole
+        argument of `attach_vaani_state` and it is not reversed here.
+        """
+        if self._engine is None:
+            return
+        gathered = getattr(self._engine, "_gathered_context", None)
+        if not isinstance(gathered, dict):
+            return
+        extracted = gathered.get("extracted_variables")
+        if not isinstance(extracted, dict):
+            return
+        for field_name, value in extracted.items():
+            if field_name not in self.state.required_fields:
+                continue
+            if field_name in self.state.known:
+                continue
+            # `false` is an answer -- "no roof" is exactly as informative as
+            # "roof" -- so only null and empty string are treated as unknown.
+            if value is None or value == "":
+                continue
+            self.state.learn(field_name, str(value))
 
     def _refresh(self) -> None:
         """Rebuild the context so the state block is last, and therefore loudest."""
