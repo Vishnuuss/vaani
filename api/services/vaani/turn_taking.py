@@ -198,8 +198,17 @@ def create_user_turn_stop_strategies(
     """
 
     if uses_external_turns:
-        return apply_filler_guard(
-            [ExternalUserTurnStopStrategy()], run_configs, in_flight=in_flight)
+        # REVERTED 18 Sep, same evening it was added. Wrapping the external
+        # branch was right in principle and catastrophic in practice: the guard
+        # DEFERS a suspected filler turn by `filler_turn_defer_secs` (1.2s, up
+        # to two times), and run 986 measured the whole point of Soniox
+        # disappearing into it -- endpoint p50 0.439s -> 1.407s, 10 of 13 turns
+        # under 0.6s -> 0 of 10, total 1.021s -> 2.123s.
+        #
+        # A backchannel guard that costs a second to hold one syllable is not
+        # worth its price here. The turn-holding problem is real and has to be
+        # solved by a cheaper mechanism than deferral.
+        return [ExternalUserTurnStopStrategy()]
 
     return apply_filler_guard(
         _build_user_turn_stop_strategies(run_configs), run_configs,

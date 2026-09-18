@@ -255,7 +255,11 @@ def _elevenlabs_realtime_stt_host(base_url: str) -> str:
 #                     tools/probe_soniox_stream.py for the continuous rerun.
 SONIOX_MODEL = "stt-rt-v5"
 SONIOX_TURNS_MODEL = "stt-rt-v5-turns"
-SONIOX_TURNS_SENSITIVITY = -0.4
+# Neutral. -0.4 was tried on 18 Sep and reverted the same evening: combined with
+# the filler guard it took the endpoint from 0.439s to 1.407s. 0.0 is the value
+# that actually measured 0.439s p50 with 10 of 13 turns under 0.6s, and speed is
+# the only reason to hand Soniox the turn at all.
+SONIOX_TURNS_SENSITIVITY = 0.0
 
 
 def soniox_owns_turns(model: str | None) -> bool:
