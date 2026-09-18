@@ -483,7 +483,12 @@ def create_stt_service(
             # -0.4 and not -1.0 on purpose: the only reason to be in this mode
             # is the 0.439s p50, and spending all of it back leaves nothing
             # over the 0.906s floor it replaces.
-            settings.endpoint_sensitivity = SONIOX_TURNS_SENSITIVITY
+            # Nothing is sent. Run 977 measured 0.439s with the field ABSENT;
+            # runs 987 and 988 measured 1.397s and 1.150s with it present at
+            # the API's own documented default of 0.0. Those should be the same
+            # request and measurably are not, so the field goes back to unsent
+            # rather than being reasoned about.
+            pass
         return SonioxSTTService(
             api_key=user_config.stt.api_key,
             sample_rate=audio_config.transport_in_sample_rate,
