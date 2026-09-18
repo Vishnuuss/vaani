@@ -79,6 +79,7 @@ class ServiceProviders(str, Enum):
     AZURE_SPEECH = "azure_speech"
     DOGRAH = "dograh"
     SARVAM = "sarvam"
+    SONIOX = "soniox"
     SPEECHMATICS = "speechmatics"
     CAMB = "camb"
     AWS_BEDROCK = "aws_bedrock"

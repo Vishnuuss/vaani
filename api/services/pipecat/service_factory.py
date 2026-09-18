@@ -99,6 +99,10 @@ from pipecat.services.smallest.tts import SmallestTTSService, SmallestTTSSetting
 from pipecat.services.speaches.llm import SpeachesLLMService, SpeachesLLMSettings
 from pipecat.services.speaches.stt import SpeachesSTTService, SpeachesSTTSettings
 from pipecat.services.speaches.tts import SpeachesTTSService, SpeachesTTSSettings
+from pipecat.services.soniox.stt import (
+    SonioxSTTService,
+    SonioxSTTSettings,
+)
 from pipecat.services.speechmatics.stt import (
     SpeechmaticsSTTService,
     SpeechmaticsSTTSettings,
@@ -228,6 +232,35 @@ def _elevenlabs_realtime_stt_host(base_url: str) -> str:
     return websocket_url
 
 
+# Soniox ships two opposite architectures behind one service, chosen by
+# `vad_force_turn_endpoint`, and the choice has to be visible to BOTH the
+# factory and `stt_uses_external_turns` -- which only ever see `user_config`.
+# So it is selected by model name, exactly as the Sarvam realtime endpoint is:
+# a config change with a one-command revert and no deploy.
+#
+#   stt-rt-v5         Soniox endpointing OFF. Our Silero VAD and the Telugu
+#                     model keep owning the turn; on VAD stop the service sends
+#                     {"type":"finalize"} and Soniox returns final tokens in a
+#                     measured 307ms p50 / 358ms p90, against Sarvam's
+#                     0.373-0.45s and a 1.17s p99. Turn-taking is untouched, so
+#                     the cut-off rate cannot move.
+#
+#   stt-rt-v5-turns   Soniox endpointing ON and authoritative -- it emits the
+#                     started/stopped-speaking frames. Measured offline at
+#                     0.480s wait with 36 of 37 ends under 0.6s, which is the
+#                     fastest this project has recorded. The first isolated-burst
+#                     probe scored its false cutoffs at 30.6%, but that probe
+#                     closed the socket at each clip's end and a stream close
+#                     FORCES an <end>, so that number is not trustworthy; see
+#                     tools/probe_soniox_stream.py for the continuous rerun.
+SONIOX_MODEL = "stt-rt-v5"
+SONIOX_TURNS_MODEL = "stt-rt-v5-turns"
+
+
+def soniox_owns_turns(model: str | None) -> bool:
+    return (model or "") == SONIOX_TURNS_MODEL
+
+
 def stt_uses_external_turns(user_config) -> bool:
     if user_config.stt.provider == ServiceProviders.DEEPGRAM.value:
         return user_config.stt.model in DEEPGRAM_FLUX_MODELS
@@ -235,6 +268,10 @@ def stt_uses_external_turns(user_config) -> bool:
         return dograh_stt_uses_flux_language(getattr(user_config.stt, "language", None))
     if user_config.stt.provider == ServiceProviders.CARTESIA.value:
         return user_config.stt.model == "ink-2"
+    if user_config.stt.provider == ServiceProviders.SONIOX.value:
+        # Only in turns mode. Getting this wrong is the Sarvam stacking bug
+        # again: the local timer would pile its wait on top of Soniox's.
+        return soniox_owns_turns(user_config.stt.model)
     return False
 
 
@@ -396,6 +433,46 @@ def create_stt_service(
             ),
             keyterms=keyterms,
             sample_rate=audio_config.transport_in_sample_rate,
+        )
+    elif user_config.stt.provider == ServiceProviders.SONIOX.value:
+        owns_turns = soniox_owns_turns(user_config.stt.model)
+        language = getattr(user_config.stt, "language", None) or "te-IN"
+        # Hints, not a restriction. `language_hints_strict` is deliberately
+        # left off: these callers code-switch constantly and speak numbers in
+        # English, and Soniox measurably transcribes those better than Sarvam
+        # -- it kept "15" in "15 లక్షలు కావాలి" where Sarvam dropped the figure.
+        hints = ["te", "en"]
+        base = (language or "").split("-")[0].lower()
+        if base and base not in hints:
+            hints = [base] + hints
+        settings = SonioxSTTSettings(
+            model=SONIOX_MODEL,          # the pseudo-model never goes on the wire
+            language_hints=hints,
+            language_hints_strict=False,
+            enable_language_identification=False,
+            enable_speaker_diarization=False,
+        )
+        if keyterms:
+            # Free accuracy and nothing equivalent was ever wired: the
+            # `dictionary` key is threaded here as `keyterms` but the Sarvam
+            # branch ignores it, and it is empty on all six agents. Two
+            # recorded defects were pure transcription misses -- "rented"
+            # transliterated so no pattern matched, and the caller was never
+            # disqualified as a result.
+            settings.context = ", ".join(keyterms)
+        # No endpoint knobs are set, in either mode, and that is deliberate.
+        # max_endpoint_delay_ms measured IDENTICAL at 500 and 2000 across 8k
+        # and 16k -- 0.480s either way -- because the semantic decision fires
+        # long before the cap, so the cap is dead config that would only look
+        # like a tuning lever. level=3 with sensitivity=0.8 left the median at
+        # 0.480s and spread the range 0.060-1.140s: variance, not speed, and
+        # variance is how cut-offs get bought.
+        return SonioxSTTService(
+            api_key=user_config.stt.api_key,
+            sample_rate=audio_config.transport_in_sample_rate,
+            settings=settings,
+            vad_force_turn_endpoint=not owns_turns,
+            ttfs_p99_latency=stt_finalisation_budget_secs,
         )
     elif user_config.stt.provider == ServiceProviders.SARVAM.value:
         language = getattr(user_config.stt, "language", None)
