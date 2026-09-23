@@ -371,6 +371,45 @@ def triage(text: str) -> Triage:
 # two-ask cap makes three the most a caller can ever be asked, which stays under
 # that. Replaying run 804 with a cap of two produced four consecutive bill
 # questions -- the fix rebuilding the bug it was written to fix.
+# "I could not hear you" -- the OPPOSITE intent to the rest of INTERRUPT_WORDS.
+#
+# `barge_in.INTERRUPT_WORDS` correctly stops the bot for "హలో", and says why:
+# a caller saying hello while the bot is talking "is a caller who cannot hear
+# it. Continuing to talk over them is the worst possible response." 381
+# occurrences, three times the next most common utterance on this agent.
+#
+# But stopping was the whole of it. Measured against the live regexes on 23 Sep:
+#
+#     'ఆగండి'        wants_the_floor True     -> refunded
+#     'హలో'          wants_the_floor False    -> refunded NOTHING
+#     'ఏమన్నారు'      wants_the_floor False    -> refunded NOTHING
+#     'అర్థం కాలేదు'   wants_the_floor False    -> refunded NOTHING
+#
+# So the ask was spent on a question he never heard, the field left
+# `still_need`, and the agent moved to the next one. Run 1031 is twelve turns of
+# that, ending on `end_call` with every field null:
+#
+#     BOT  మీది సొంత ఇల్లా,        cut off
+#     USER హలో.
+#     BOT  మీ కరెంట్ బిల్లు నెలకి    the BILL, which he also never heard
+#
+# "ఆగండి"/"వద్దు" mean STOP TALKING. "హలో"/"ఏమన్నారు" mean SAY IT AGAIN. Both
+# stop the bot; only the second should bring the question back. Checked BEFORE
+# CANNOT_ANSWER because "అర్థం కాలేదు" reads as a refusal to that pattern and is
+# not one -- abandoning the field there is the same lost question by a longer
+# route.
+SAY_IT_AGAIN = re.compile(
+    r"(హలో|హలొ|హెలో"
+    r"|ఏమన్నార|ఏమన్నావ|ఏమిటన్నార"
+    r"|అర్ధం\s*కాలేదు|అర్థం\s*కాలేదు|అర్థం\s*కావట్లేదు"
+    r"|వినిపించలేదు|వినపడలేదు|వినబడలేదు|సరిగ్గా\s*వినిపి"
+    r"|ఏంటండి|ఏంటమ్మా|ఏంది\b|ఏమండి"
+    r"|\bhello\b|\bhelo\b"
+    r"|come\s+again|say\s+(that\s+)?again|pardon"
+    r"|couldn'?t\s+(hear|catch)|can'?t\s+hear\s+you)",
+    re.IGNORECASE)
+
+
 MAX_REFUNDS_PER_FIELD = 1
 
 
@@ -531,6 +570,15 @@ def apply(state, text: str) -> Triage:
     # `still_need`, which is the only thing that lets the agent ask it again.
     # Checked BEFORE the "you skipped me" branch: the two are one character
     # apart and the wrong reading costs the caller the same question again.
+    # He is telling us the last sentence did not land. Give the question back
+    # and mark the turn misheard, which is what instructs the model to ask the
+    # SAME thing again rather than moving on. Bounded by MAX_REFUNDS_PER_FIELD
+    # like every other refund, so a caller on a dead line cannot rebuild run
+    # 870's unbounded loop out of it.
+    elif SAY_IT_AGAIN.search(text or ""):
+        _refund_ask(state, "the caller could not hear the question")
+        state.misheard_last_turn = True
+
     elif CANNOT_ANSWER.search(text or ""):
         _abandon_ask(state, "the caller declined to answer it")
 
