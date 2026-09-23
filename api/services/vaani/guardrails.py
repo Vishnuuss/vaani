@@ -331,13 +331,25 @@ REPAIR_LINE = (
 )
 
 
+# `అండి`, not `సార్`. Everything the model says is `అండి`, so a canned line
+# opening `సార్` is audibly a different person answering -- and roughly half a
+# solar call list is women, for whom it is simply the wrong word. `అండి` is
+# respectful and carries no gender, which is why the agent uses it everywhere
+# else. `కచ్చితమైన డీటెయిల్` was a written-register hybrid; a person says
+# `కరెక్ట్ గా`.
 SAFE_FALLBACK = (
-    "సార్, కరెక్ట్ ఫిగర్ ఇప్పుడే చెప్పలేను. "
-    "మా టీమ్ నుంచి కచ్చితమైన డీటెయిల్ చెప్పిస్తాను, సరేనా?"
+    "ఆ ఫిగర్ ఇప్పుడే చెప్పలేను అండి. "
+    "మా టీమ్ చెక్ చేసి కరెక్ట్ గా చెప్తారు, సరేనా?"
 )
 
 # Used when the call must close and the draft kept interrogating.
-SAFE_CLOSE = "సరే సార్, మీ టైమ్ ఇచ్చినందుకు థాంక్యూ. మంచి రోజు సార్."
+# The LAST thing every closed call hears, so it is worth getting right.
+# It used to be "సరే సార్, మీ టైమ్ ఇచ్చినందుకు థాంక్యూ. మంచి రోజు సార్."
+# `మంచి రోజు` is a word-for-word calque of "good day" that Telugu speakers do
+# not say on the phone -- `end_call_bridge.py` already records
+# "ధన్యవాదాలు, మంచి రోజు!" as a known past defect, and this line still said it.
+# `సార్` twice, and wrong for half the list.
+SAFE_CLOSE = "సరే అండి, మీ టైమ్ ఇచ్చినందుకు థాంక్యూ అండి."
 
 
 def must_close(state) -> bool:
