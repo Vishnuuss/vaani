@@ -238,13 +238,18 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
         questions.append({"field": name, "ask": ask or name})
 
     brief = VaaniBrief(business=workflow_name or "", questions=questions)
-    injector = StateInjector(brief, context, system_prompt, engine=engine)
-    # The half of Layer 3 that was compiled OUT of the system prompt, parsed
-    # once per call and consulted per turn. Parsed here rather than in
-    # `render()` because the text is fixed for the whole call and the regexes
-    # are not free; `render()` runs on every turn.
-    injector.state.reference = client_reference.parse(
-        client_reference.split(getattr(start_node, "prompt", "") or "")[1])
+    # The half of Layer 3 that was compiled OUT of the system prompt. Needed in
+    # two places, so split once: parsed into answer rows below, and handed to
+    # StateInjector so the number whitelist covers the client's own figures.
+    # Without the second, `no_invented_quantity` blocks the subsidy, units and
+    # warranty answers -- see `whitelist_numbers`.
+    reference_half = client_reference.split(
+        getattr(start_node, "prompt", "") or "")[1]
+    injector = StateInjector(brief, context, system_prompt, engine=engine,
+                             reference_text=reference_half)
+    # Parsed here rather than in `render()` because the text is fixed for the
+    # whole call and the regexes are not free; `render()` runs on every turn.
+    injector.state.reference = client_reference.parse(reference_half)
     return injector, ReplyFilter(injector, filler_state=filler_state,
                                  in_flight=in_flight)
 

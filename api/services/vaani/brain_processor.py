@@ -86,10 +86,36 @@ from api.services.vaani.state import (CallState, _is_presence_check,
                                       _is_question, echoes_agent)
 
 
+def whitelist_numbers(system_prompt: str, reference_text: str = "") -> set:
+    """Every number the CLIENT wrote, from BOTH halves of Layer 3.
+
+    Reading `system_prompt` alone was right until Layer 3 was split. Since then
+    `client_reference.split(prompt)[0]` is what gets compiled, and the knowledge
+    base -- the half that actually holds the figures -- lives below
+    `## Reference` and is consulted per turn. So the invariant this whitelist
+    exists for, "a new knowledge base defines its own legal numbers just by
+    containing them", quietly stopped holding.
+
+    Measured on MB Solar, 23 Sep: the whitelist held 14 trivial entries and
+    `no_invented_quantity` BLOCKED the subsidy, units and warranty answers --
+    the three most-asked questions on a solar call -- replacing each with
+    SAFE_FALLBACK, "I cannot give you the correct figure right now". It looked
+    intermittent because `_gate` substitutes only while nothing has been spoken
+    yet and HOLDBACK releases the first chunk early, so whether it fired
+    depended on how large a first frame the LLM happened to send.
+
+    The PM Surya Ghar figures are not inventions; they are in the file the
+    client wrote. A genuinely invented number is still caught, because it
+    appears in neither half.
+    """
+    return guardrails.numbers_in((system_prompt or "") + "\n" + (reference_text or ""))
+
+
 class StateInjector(FrameProcessor):
     """Keeps the live state block at the end of the LLM context."""
 
-    def __init__(self, brief: Brief, context, system_prompt: str, engine=None):
+    def __init__(self, brief: Brief, context, system_prompt: str, engine=None,
+                 reference_text: str = ""):
         super().__init__()
         self._context = context
         self._system_prompt = system_prompt
@@ -104,7 +130,7 @@ class StateInjector(FrameProcessor):
         # This is what makes the invented-quantity rule work for any client
         # without a code change: a new knowledge base defines its own legal
         # numbers just by containing them.
-        self.known_numbers = guardrails.numbers_in(system_prompt)
+        self.known_numbers = whitelist_numbers(system_prompt, reference_text)
         self.state = CallState(
             required_fields=brief.field_names,
             questions=dict(zip(brief.field_names, brief.question_texts)),
