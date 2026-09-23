@@ -1,3 +1,4 @@
+import os
 from functools import wraps
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -255,6 +256,31 @@ def _elevenlabs_realtime_stt_host(base_url: str) -> str:
 #                     tools/probe_soniox_stream.py for the continuous rerun.
 SONIOX_MODEL = "stt-rt-v5"
 SONIOX_TURNS_MODEL = "stt-rt-v5-turns"
+
+# WHERE the audio goes, which turned out to matter more than any knob on it.
+#
+# Ears-only Soniox measured 0.686s STT on 19 Sep against the Sarvam it replaced
+# at 0.392s, and it was reverted the same day. The offline flush that justified
+# the whole experiment was 307ms. The gap was never the model: this server is in
+# MUMBAI (200.141.7.188, Hostinger IN) and `stt-rt.soniox.com` is Soniox's
+# global host, so every finalisation was crossing an ocean and coming back
+# before the caller could be answered.
+#
+# Soniox opened an India region on request. Measured 23 Sep from an Indian
+# client on identical Telugu call audio, flush p50: global 3.782s, India 1.410s.
+# The absolute numbers carry a degraded home link and are not the server's; the
+# ratio is the finding.
+#
+# Region keys are scoped to their region -- the India key returns 401 on the
+# global host and the old global key returns 401 here -- so the URL and the key
+# in the org STT config must move TOGETHER. Changing one alone fails as a dead
+# STT, which on this stack presents as the agent greeting and then never
+# responding, indistinguishable from the turn-detection bugs this project
+# spends its life chasing. Hence an env var with a loud default rather than a
+# silent constant.
+SONIOX_URL = os.getenv(
+    "SONIOX_STT_URL", "wss://stt-rt.in.soniox.com/transcribe-websocket"
+)
 # Neutral. -0.4 was tried on 18 Sep and reverted the same evening: combined with
 # the filler guard it took the endpoint from 0.439s to 1.407s. 0.0 is the value
 # that actually measured 0.439s p50 with 10 of 13 turns under 0.6s, and speed is
@@ -490,6 +516,7 @@ def create_stt_service(
             # rather than being reasoned about.
             pass
         return SonioxSTTService(
+            url=SONIOX_URL,
             api_key=user_config.stt.api_key,
             sample_rate=audio_config.transport_in_sample_rate,
             settings=settings,
