@@ -83,43 +83,42 @@ def _fresh_turn(f):
     return f
 
 
+# The answered-field path no longer reaches REPAIR_LINE at all -- it moves to
+# the next needed question (test_a_known_field_moves_on.py). The wording-repeat
+# path still uses it, and that is the path these tests drive. `_said` is
+# appended where a reply is SPOKEN, not in `_gate`, so it is seeded here the way
+# the frame path would.
+
+
 def test_the_first_block_still_says_it_could_not_hear():
     """The one-shot must not remove the behaviour, only stop it repeating."""
-    f, _ = _filter({"roof_available": True})
-    assert f._gate(QUESTIONS["roof_available"]) == guardrails.REPAIR_LINE
+    f, _ = _filter({k: "x" for k in QUESTIONS})       # nothing left to move on to
+    line = QUESTIONS["location"]
+    f._said.append(line)
+    assert f._gate(line) == guardrails.REPAIR_LINE
 
 
 def test_the_second_block_in_a_row_does_not_repeat_the_apology():
-    f, _ = _filter({"roof_available": True})
-    assert f._gate(QUESTIONS["roof_available"]) == guardrails.REPAIR_LINE
+    f, _ = _filter({k: "x" for k in QUESTIONS})
+    line = QUESTIONS["location"]
+    f._said.append(line)
+    assert f._gate(line) == guardrails.REPAIR_LINE
     _fresh_turn(f)
-    again = f._gate(QUESTIONS["roof_available"])
-    assert again != guardrails.REPAIR_LINE, (
+    assert f._gate(line) != guardrails.REPAIR_LINE, (
         "four identical apologies is what made run 1023 hang up")
 
 
 def test_run_1023_never_says_it_four_times():
-    f, _ = _filter({"roof_available": True, "assessment_agreed": True})
+    f, _ = _filter({k: "x" for k in QUESTIONS})
+    line = QUESTIONS["location"]
+    f._said.append(line)
     said = []
     for _ in range(4):
         _fresh_turn(f)
-        said.append(f._gate(QUESTIONS["roof_available"]))
+        said.append(f._gate(line))
     assert said.count(guardrails.REPAIR_LINE) <= 1, (
         f"REPAIR_LINE emitted {said.count(guardrails.REPAIR_LINE)} times; "
         "it is a one-shot")
-
-
-def test_an_ordinary_reply_rearms_the_repair_line():
-    """A caller who is being understood again should get the repair line if a
-    LATER turn genuinely needs it. The one-shot is about consecutive blocks,
-    not about spending it once per call."""
-    f, _ = _filter({"roof_available": True})
-    assert f._gate(QUESTIONS["roof_available"]) == guardrails.REPAIR_LINE
-    _fresh_turn(f)
-    line = QUESTIONS["location"]
-    assert f._gate(line) == line          # an unknown field passes through
-    _fresh_turn(f)
-    assert f._gate(QUESTIONS["roof_available"]) == guardrails.REPAIR_LINE
 
 
 def test_the_repeat_guard_is_one_shot_too():

@@ -358,6 +358,32 @@ class ReplyFilter(FrameProcessor):
         name = (getattr(state, "known", {}) or {}).get("customer_name", "")
         return (str(name).strip(),) if name else ()
 
+    def _next_needed_question(self):
+        """The question for the first field we still do not have.
+
+        A blocked re-ask is not a question about what to SAY, it is a question
+        about what to ask NEXT, and the state already knows: `still_need` is the
+        uncollected fields in order and `questions` holds their wording. Run
+        1027 asked for the city it had already stored, twice, because this was
+        answered with a sentence instead of with the next field.
+
+        Returns None when there is nothing left to ask -- the caller should not
+        be handed a question just because one was needed here.
+        """
+        state = getattr(self._injector, "state", None) if self._injector else None
+        if state is None or guardrails.must_close(state):
+            return None
+        try:
+            needed = list(getattr(state, "still_need", []) or [])
+            questions = dict(getattr(state, "questions", {}) or {})
+        except Exception:
+            return None
+        for field in needed:
+            line = questions.get(field)
+            if line:
+                return line
+        return None
+
     def _repair(self):
         """REPAIR_LINE, but only if we did not just say it.
 
@@ -524,6 +550,12 @@ class ReplyFilter(FrameProcessor):
                     f"[answered] {asked_about} is already known "
                     f"({state.known.get(asked_about)!r}); not asking it again: "
                     f"{candidate[:60]!r}")
+                # Move the call on rather than apologising or repeating.
+                nxt = self._next_needed_question()
+                if nxt:
+                    logger.info(f"[answered] moving on to {nxt[:50]!r}")
+                    state.misheard_last_turn = False
+                    return nxt
                 repair = self._repair()
                 if repair is not None:
                     return repair

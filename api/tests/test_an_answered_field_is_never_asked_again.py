@@ -64,21 +64,34 @@ def _filter(known: dict):
     return f
 
 
+# What a blocked re-ask becomes changed on 23 Sep. These tests still pin the
+# thing that matters -- the known field is never asked again -- but the
+# substitution is now the next question we actually need, not REPAIR_LINE.
+# Run 1023 showed the apology repeating until the caller hung up, and run 1027
+# showed the re-ask getting through once the apology was made a one-shot. Both
+# were answers to "what should it SAY"; the right question was "what should it
+# ask NEXT". See test_a_known_field_moves_on.py.
+
+
 def test_run_891_the_property_is_not_asked_once_it_is_known():
     f = _filter({"property_type": "commercial"})
-    assert f._gate(QUESTIONS["property_type"]) == guardrails.REPAIR_LINE
+    out = f._gate(QUESTIONS["property_type"])
+    assert out != QUESTIONS["property_type"]
+    assert out == QUESTIONS["monthly_bill"], "the next field we still need"
 
 
 def test_run_891_the_bill_is_not_asked_once_it_is_written_down():
     f = _filter({"monthly_bill": "5000000"})
-    assert f._gate(QUESTIONS["monthly_bill"]) == guardrails.REPAIR_LINE
+    out = f._gate(QUESTIONS["monthly_bill"])
+    assert out != QUESTIONS["monthly_bill"]
+    assert out == QUESTIONS["property_type"]
 
 
 def test_a_reworded_re_ask_of_a_known_field_is_caught_too():
     """Wording differs; the subject does not. That is the whole point."""
     f = _filter({"property_type": "commercial"})
-    assert f._gate("మీరు సొంత ఇల్లు, అపార్ట్‌మెంట్ లేదా కమర్షియల్ స్థలం ఏది?") == (
-        guardrails.REPAIR_LINE)
+    out = f._gate("మీరు సొంత ఇల్లు, అపార్ట్‌మెంట్ లేదా కమర్షియల్ స్థలం ఏది?")
+    assert out == QUESTIONS["monthly_bill"]
 
 
 def test_a_field_we_do_not_have_is_asked_normally():
