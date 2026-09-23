@@ -283,6 +283,50 @@ def _telugu_analyzer(run_configs: dict, *, stop_secs: float | None = None):
         return None
 
 
+# Keys the `turn_analyzer` branch alone consults. On a "transcription" agent
+# every one of them is inert, and every one of them reads like a decision.
+_ANALYZER_ONLY_KEYS = (
+    "semantic_turn_completion",
+    "turn_model",
+    "endpoint_min_secs",
+    "endpoint_max_secs",
+    "endpoint_unsure_floor_secs",
+    "endpoint_unsure_band",
+    "smart_turn_stop_secs",
+)
+
+
+def _warn_about_analyzer_only_keys(run_configs: dict, strategy: str) -> None:
+    """Say so when a stored turn key cannot possibly do anything.
+
+    MB Solar ran for two weeks with `semantic_turn_completion: True` stored on
+    it while sitting on `turn_stop_strategy: "transcription"`, which never reads
+    that key. Everybody who opened the config believed the LLM was gating turn
+    ends; the turn was really ended by whichever of the 0.7s timer and the eager
+    Telugu assist fired first. On run 1012 a caller answered "మాది.", drew
+    breath, lost the floor, and the reply he triggered was cancelled by his own
+    next words three times over -- so he heard silence and hung up.
+
+    The stored value was wrong, but what made it expensive was that being wrong
+    looked exactly like being right. This is the cheapest possible cure: name
+    the key, and name the setting that would bring it to life.
+    """
+    if strategy == "turn_analyzer":
+        return
+    dead = [k for k in _ANALYZER_ONLY_KEYS if run_configs.get(k) not in (None, False)]
+    if not dead:
+        return
+    # loguru formats with {}, not %. An earlier version of this call passed
+    # %-style args, logged a warning that named none of the keys, and so
+    # reproduced the exact silence it was written to break.
+    logger.warning(
+        f"[turn] ignored on turn_stop_strategy={strategy!r}: "
+        f"{', '.join(dead)}. These are read only by the turn_analyzer branch; "
+        f'set turn_stop_strategy="turn_analyzer" to make them live, or clear '
+        f"them so the config stops claiming something the agent does not do."
+    )
+
+
 def _build_user_turn_stop_strategies(run_configs: dict):
     """The detector itself, unwrapped. See the caller for why the split."""
 
@@ -293,6 +337,7 @@ def _build_user_turn_stop_strategies(run_configs: dict):
     # timeout below. Measured cost: a dead-constant 0.80s endpoint on runs 110
     # and 163. See test_turn_stop_default_is_applied.py.
     strategy = run_configs.get("turn_stop_strategy", DEFAULT_TURN_STOP_STRATEGY)
+    _warn_about_analyzer_only_keys(run_configs, strategy)
 
     if strategy == "turn_analyzer":
         stop_secs = run_configs.get(
