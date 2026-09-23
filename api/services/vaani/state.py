@@ -294,6 +294,14 @@ class CallState:
     # evidence for anything, least of all for hanging up. See
     # `extractor.apply_to_state`.
     misheard_last_turn: bool = False
+    # REPAIR_LINE is a ONE-SHOT, and this is what remembers that across turns.
+    # The filter is rebuilt every turn, so a counter on the filter resets and
+    # cannot see a loop. Run 1023 said "I could not hear you" four times to a
+    # caller whose every word was in the transcript, because `roof_available`
+    # was already known and each re-ask was blocked and substituted afresh.
+    # Cleared whenever an ordinary reply gets through, so a later turn that
+    # genuinely needs the repair line still gets one.
+    repair_said_last_turn: bool = False
     next_step_agreed: bool = False   # a visit/callback/time has been accepted
     buying_signal: bool = False      # caller asked to book, or asked a closing question
     refusals: int = 0                # plain refusals so far; the 2nd ends the call

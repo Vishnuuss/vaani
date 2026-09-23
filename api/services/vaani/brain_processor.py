@@ -327,6 +327,7 @@ class ReplyFilter(FrameProcessor):
         # అయిపోతుంది". The unit tests missed it because they build this object
         # with __new__ and set the fields by hand, so __init__ never ran.
         self._said: list[str] = []
+        self._repair_suppressed = False
         # Is the caller speaking RIGHT NOW?
         #
         # Defect 4 of the four that got semantic turn completion reverted. With
@@ -356,6 +357,35 @@ class ReplyFilter(FrameProcessor):
         state = getattr(self._injector, "state", None)
         name = (getattr(state, "known", {}) or {}).get("customer_name", "")
         return (str(name).strip(),) if name else ()
+
+    def _repair(self):
+        """REPAIR_LINE, but only if we did not just say it.
+
+        Run 1023: four identical "I could not hear you" lines to a caller whose
+        every word is in the transcript. Both guards below are RIGHT to block --
+        one caught a reworded re-ask, the other a field already in `known` --
+        and both substituted the same apology, every turn, because the filter is
+        rebuilt per turn and nothing remembered the last one.
+
+        Saying it twice in a row is strictly worse than letting the model speak.
+        The caller is being asked to repeat something already written down, so
+        repeating it cannot help; and an identical line every turn is the very
+        "asked the same question four times word for word" failure REPAIR_LINE
+        exists to cure. The ask budget and `must_close` still sit above this, so
+        letting the candidate through is bounded.
+
+        Returns None when the caller should hear the model instead.
+        """
+        state = getattr(self._injector, "state", None) if self._injector else None
+        if state is not None and getattr(state, "repair_said_last_turn", False):
+            logger.warning("[repair] already said it last turn; letting the "
+                           "reply through rather than apologising again")
+            self._repair_suppressed = True
+            return None
+        if state is not None:
+            state.misheard_last_turn = True
+            state.repair_said_last_turn = True
+        return guardrails.REPAIR_LINE
 
     def _gate(self, candidate: str) -> str:
         """Judge text BEFORE it is spoken; substitute rather than log.
@@ -456,9 +486,10 @@ class ReplyFilter(FrameProcessor):
             # has now heard twice and we have already failed to understand
             # once. It is not evidence for a disqualifier. Run 312 hung up on
             # a factory owner at exactly this point.
-            if self._injector:
-                self._injector.state.misheard_last_turn = True
-            return guardrails.REPAIR_LINE
+            repair = self._repair()
+            if repair is not None:
+                return repair
+            self._blocked = False
 
         # A field already written down must never be asked again.
         #
@@ -493,8 +524,10 @@ class ReplyFilter(FrameProcessor):
                     f"[answered] {asked_about} is already known "
                     f"({state.known.get(asked_about)!r}); not asking it again: "
                     f"{candidate[:60]!r}")
-                state.misheard_last_turn = True
-                return guardrails.REPAIR_LINE
+                repair = self._repair()
+                if repair is not None:
+                    return repair
+                self._blocked = False
 
         # The model writing its OWN "I could not hear you" counts exactly like
         # the guard writing one: whatever comes back next is an answer to a
@@ -515,6 +548,18 @@ class ReplyFilter(FrameProcessor):
             known_numbers=getattr(self._injector, "known_numbers", None))
         hits = guardrails.blocking(report)
         if not hits:
+            # An ordinary reply got through, so the caller is being understood
+            # again and the one-shot re-arms. Without this a single repair line
+            # would disarm it for the rest of the call, and a genuine mishearing
+            # twenty turns later would get no repair at all.
+            state = getattr(self._injector, "state", None) if self._injector else None
+            # ...unless this reply only got here because the repair was
+            # suppressed. That is a blocked turn wearing the model's words, and
+            # treating it as ordinary re-arms the one-shot immediately, which
+            # produced a perfect REPAIR, question, REPAIR, question alternation
+            # -- two apologies in four turns instead of one.
+            if state is not None and not getattr(self, "_repair_suppressed", False):
+                state.repair_said_last_turn = False
             return candidate
 
         rules = ", ".join(f"{v.rule}({v.evidence})" for v in hits)
