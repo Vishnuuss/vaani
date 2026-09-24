@@ -179,6 +179,32 @@ def numbers_in(text: str) -> set[str]:
     return out
 
 
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").lower()).strip()
+
+
+def _quoted_from(price: str, reference_text: str) -> bool:
+    """Is this exact price phrase in the reference answer served this turn?
+
+    The price rule matches "rupees" beside a figure and cannot tell the PM
+    Surya Ghar subsidy the client wrote down from a price the model made up,
+    so the subsidy answer was replaced with SAFE_FALLBACK -- the strongest
+    thing this agent has to sell.
+
+    Why a phrase and not the whitelist. `known_numbers` holds words like "two"
+    and "thousand", so checking tokens would let "two thousand rupees" through
+    on the very turn the subsidy row was served. The row says "thirty thousand
+    rupees"; "two thousand" is in it nowhere, so a substring check refuses it.
+
+    Why not simply allow_price on a reference turn, which was tried first.
+    `invented_quantities` only examines sentences carrying a UNIT word, and
+    "rupees" is not one -- the two rules partition the space. A blanket
+    relaxation left every invented rupee amount unguarded on that turn, and
+    `test_an_invented_price_is_still_caught_on_that_same_turn` caught it.
+    """
+    return bool(price) and _norm(price) in _norm(reference_text)
+
+
 def invented_quantities(reply: str, allowed: set[str]) -> list[str]:
     """Numbers the reply states next to a unit that nobody supplied.
 
@@ -198,7 +224,8 @@ def invented_quantities(reply: str, allowed: set[str]) -> list[str]:
 
 def check(reply: str, *, allow_price: bool = False,
           closing: bool = False, caller_said: str = "",
-          known_numbers: set[str] | None = None) -> GuardrailReport:
+          known_numbers: set[str] | None = None,
+          reference_text: str = "") -> GuardrailReport:
     """Inspect a drafted reply. Fast, deterministic, no model call.
 
     `closing` comes from `must_close(state)`. When it is set, the call is over
@@ -250,11 +277,16 @@ def check(reply: str, *, allow_price: bool = False,
     # bill the caller had just stated. The rule exists to stop the agent
     # INVENTING a price, and echoing their number invents nothing.
     echoing_them = bool(caller_said) and _echoes_a_number(text, caller_said)
-    if not allow_price and not echoing_them and (
-            _PRICE.search(text) or _PRICE_WORDS.search(text)):
+    # A price phrase is exempt only if it appears VERBATIM in the reference
+    # answer the model was handed on this turn -- see `_quoted_from`.
+    prices = ([m.group(0) for m in _PRICE.finditer(text)]
+              + [m.group(0) for m in _PRICE_WORDS.finditer(text)])
+    if reference_text:
+        prices = [p for p in prices if not _quoted_from(p, reference_text)]
+    if not allow_price and not echoing_them and prices:
         report.violations.append(Violation(
             rule="no_price_quote",
-            evidence=(_PRICE.search(text) or _PRICE_WORDS.search(text)).group(0),
+            evidence=prices[0],
             correction=("Do not quote a price or total cost on the call. Say the "
                         "next step is what settles the exact figure."),
         ))

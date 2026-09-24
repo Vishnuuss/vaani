@@ -117,3 +117,35 @@ def test_the_refund_is_bounded():
         triage.apply(state, "హలో")
     refunds = getattr(state, "refunds", {}) or {}
     assert refunds.get("property_type", 0) <= triage.MAX_REFUNDS_PER_FIELD
+
+
+def test_hello_is_not_counted_as_an_answer():
+    """The SECOND door on run 1031, closed 24 Sep.
+
+    Refunding the ASK (above) was one of two per-field budgets. The other is
+    `answer_counts`, charged by `note_answer_to_last_ask`, and `still_need`
+    retires a field at MAX_ANSWERS_PER_FIELD with no refund path. "హలో" is
+    neither a question nor a pure hesitation, so it used to be counted as an
+    answer -- and a caller who could not hear lost the field through that door
+    instead.
+    """
+    state = _asked()
+    state.note_answer_to_last_ask("హలో")
+    assert state.answer_counts.get("property_type", 0) == 0
+    assert "property_type" not in state.answered_pending
+
+
+def test_the_real_run_1031_shape_keeps_every_budget():
+    """One "హలో" per question, then the re-ask -- how run 1031 actually went.
+    Each field must come out with its full budget intact for the real answer."""
+    state = CallState(required_fields=list(QUESTIONS), questions=dict(QUESTIONS))
+    for field in QUESTIONS:
+        state.ask_counts[field] = state.ask_counts.get(field, 0) + 1
+        state.last_asked = field
+        triage.apply(state, "హలో")
+        state.note_answer_to_last_ask("హలో")
+        state.ask_counts[field] = state.ask_counts.get(field, 0) + 1
+        state.last_asked = field
+        assert state.answer_counts.get(field, 0) == 0, field
+        assert field in state.still_need, (
+            f"{field} was retired after one హలో; the caller never heard it")

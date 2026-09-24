@@ -202,6 +202,19 @@ def _is_presence_check(text: str) -> bool:
     return not _is_question(rest)
 
 
+def _asks_to_hear_it_again(text: str) -> bool:
+    """Is the caller saying the last question did not reach him?
+
+    Delegates to `triage.SAY_IT_AGAIN` rather than keeping a second copy of the
+    pattern. Two definitions drifting apart is exactly how "హలో" came to refund
+    one of the two per-field budgets and not the other. Imported inside the
+    function because triage is the module that decides what a turn MEANS and
+    state should not depend on it at import time.
+    """
+    from api.services.vaani.triage import SAY_IT_AGAIN
+    return bool(SAY_IT_AGAIN.search(text or ""))
+
+
 def _is_question(text: str) -> bool:
     t = (text or "").strip()
     if not t:
@@ -954,6 +967,19 @@ class CallState:
     reference: list = field(default_factory=list)
     # Row titles already given, so the same answer is not handed over twice.
     referenced: set = field(default_factory=set)
+    # Did THIS turn serve a reference row? Per-turn, reset on every render.
+    #
+    # `referenced` above accumulates titles across the whole call for
+    # de-duplication, so it cannot say which row fired now. This can, and it is
+    # what lets the price rule stand down for the client's own figures on the
+    # one turn the model was handed them -- see `_gate`. If it leaked into the
+    # next turn, a single subsidy question would license prices for the rest of
+    # the call.
+    reference_served_this_turn: bool = False
+    # The TEXT of the rows served this turn, so the price rule can check that a
+    # quoted figure is literally the client's rather than merely made of words
+    # the client happened to use. Reset with the flag on every render.
+    reference_text_this_turn: str = ""
     # What WE have already asked. Run 96 asked the same question four times and
     # the caller said "you told me nothing"; the model cannot avoid repeating
     # itself if it is never shown what it already said.
@@ -1054,6 +1080,20 @@ class CallState:
         if _is_question(said):
             # He asked US something. The question we asked is still open, and
             # the answer-first rule will bring it back after we have replied.
+            return
+        if _asks_to_hear_it_again(said):
+            # "హలో", "ఏమన్నారు", "అర్థం కాలేదు" -- he is telling us the question
+            # did not REACH him, so it cannot have been answered.
+            #
+            # Run 1031 was twelve turns, `end_call`, every field null. The 23
+            # Sep fix taught triage to refund the ASK for these words, and that
+            # was only one of two budgets. This method is the other: it put the
+            # field in `answered_pending` and charged `answer_counts`, and
+            # `still_need` retires a field at MAX_ANSWERS_PER_FIELD with no
+            # refund path at all. Replayed on 24 Sep, ten turns of nothing but
+            # "హలో": `known == {}`, `answer_counts` at the cap on two fields,
+            # the checklist EMPTY. The same call, through the door the first
+            # fix did not close.
             return
         self.answered_pending.add(field_asked)
         # He answered. Counted whether or not anything was understood -- see
@@ -1670,9 +1710,14 @@ class CallState:
         # industries; this carries the facts that do not -- the subsidy
         # figures, the warranty, what happens after they register. Both are
         # charged only on the turn the caller reaches for them.
+        self.reference_served_this_turn = False
+        served: list[str] = []
         for line in client_reference.lookup(self.reference, self.last_user_text,
                                             self.referenced):
             lines.append(line)
             self.referenced.add(line.split("(", 1)[1].split(")", 1)[0])
+            self.reference_served_this_turn = True
+            served.append(line)
+        self.reference_text_this_turn = "\n".join(served)
         lines.append(f"TURN: {self.turn}   CALL_ELAPSED: {self.elapsed_s}s")
         return "\n".join(lines)

@@ -384,7 +384,7 @@ class ReplyFilter(FrameProcessor):
         name = (getattr(state, "known", {}) or {}).get("customer_name", "")
         return (str(name).strip(),) if name else ()
 
-    def _next_needed_question(self):
+    def _next_needed_question(self, exclude: str = ""):
         """The question for the first field we still do not have.
 
         A blocked re-ask is not a question about what to SAY, it is a question
@@ -405,6 +405,8 @@ class ReplyFilter(FrameProcessor):
         except Exception:
             return None
         for field in needed:
+            if field == exclude:
+                continue
             line = questions.get(field)
             if line:
                 return line
@@ -541,6 +543,49 @@ class ReplyFilter(FrameProcessor):
             repair = self._repair()
             if repair is not None:
                 return repair
+            # The repair line is spent, so move the call on instead of letting
+            # the model's words through -- the answered-field branch below has
+            # always done this, and this branch never did.
+            #
+            # Replayed 24 Sep: one stubborn question over ten turns, and the
+            # caller heard the IDENTICAL sentence nine times, eight in a row,
+            # with ask_counts at 10. The guard fired every turn and was
+            # overruled on nine, because a suppressed repair fell through to the
+            # repeat itself. `_repair`'s docstring said the ask budget bounds
+            # this. It does not: the budget bounds what the STATE nominates,
+            # not what the model copies out of the history -- run 721's lesson.
+            #
+            # The field being repeated is excluded, or a field still first on
+            # the checklist would hand back the very question it is stuck on.
+            state = getattr(self._injector, "state", None) if self._injector else None
+            subject_of = getattr(state, "field_asked_in", None) if state else None
+            stuck_on = subject_of(candidate) if callable(subject_of) else ""
+            nxt = self._next_needed_question(exclude=stuck_on or "")
+            if nxt:
+                logger.info(f"[repeat] repair spent; moving on to {nxt[:50]!r}")
+                return nxt
+            # Nothing left to move on to. Two ways that happens, and both mean
+            # the conversation is over:
+            #
+            #   * the call is CLOSING -- he refused twice, or a next step is
+            #     agreed -- so `_next_needed_question` rightly asks nothing new;
+            #   * the checklist is EXHAUSTED -- every field known, abandoned or
+            #     spent -- and `must_close` does not know that.
+            #
+            # The second was measured on 24 Sep: `still_need == []`, `must_close`
+            # False, and the model repeating one question for six straight turns
+            # because nothing else was left for it to say. A blocked repeat with
+            # nowhere to go says goodbye.
+            if state is not None and (guardrails.must_close(state)
+                                      or not list(getattr(state, "still_need", []) or [])):
+                logger.info("[repeat] repair spent and nothing left to ask; closing")
+                # And actually END it. Returning SAFE_CLOSE without this said
+                # goodbye and left the line open, so the model drafted again and
+                # the caller heard the closing line seven turns running -- run
+                # 803's "the goodbye is an event, not a standing order", reached
+                # from a new direction. `must_end` is what hangs up.
+                state.must_end = True
+                return guardrails.SAFE_CLOSE
             self._blocked = False
 
         # A field already written down must never be asked again.
@@ -596,8 +641,27 @@ class ReplyFilter(FrameProcessor):
 
         closing = bool(self._injector) and guardrails.must_close(
             self._injector.state)
+        # The price rule stands down ONLY on a turn where the model was just
+        # handed one of the client's reference answers.
+        #
+        # `no_price_quote` matches the word "rupees" beside a figure and cannot
+        # tell the PM Surya Ghar subsidy the client wrote down from a price the
+        # model invented. `_gate` never passed `allow_price`, so it could never
+        # be satisfied, and the subsidy answer -- the strongest thing this agent
+        # has to sell -- was replaced with SAFE_FALLBACK every time the figure
+        # landed in the first released chunk.
+        #
+        # The rule's own echo exemption states the principle: it exists "to
+        # stop the agent INVENTING a price". A phrase copied from the reference
+        # row the model was handed this turn invents nothing -- so exactly that
+        # phrase is exempt, and nothing else. See `guardrails._quoted_from` for
+        # why neither a token whitelist nor a blanket allow_price is safe.
+        reference_text = (getattr(self._injector.state,
+                                  "reference_text_this_turn", "")
+                          if self._injector else "")
         report = guardrails.check(
             self._spoken + candidate, closing=closing,
+            reference_text=reference_text,
             caller_said=(self._injector.state.last_user_text
                          if self._injector else ""),
             # getattr, not attribute access: the injector is a test double in
