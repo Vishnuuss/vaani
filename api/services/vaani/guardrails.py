@@ -374,6 +374,14 @@ SAFE_FALLBACK = (
     "మా టీమ్ చెక్ చేసి కరెక్ట్ గా చెప్తారు, సరేనా?"
 )
 
+# Said ONCE when every question is spent but the call has not earned its end --
+# the checklist was ABANDONED, not answered. Run 817: every field hit its cap
+# while the caller was still engaged ("నేను మాట్లాడేది కొంచెం వింటారా?") and the
+# agent hung up on him. Abandonment must keep talking, so the first move is to
+# hand him the floor. Only if the model is still stuck repeating itself after
+# this does the call close.
+OPEN_LINE = "సరే అండి, మీకు ఇంకా ఏమైనా తెలుసుకోవాలా?"
+
 # Used when the call must close and the draft kept interrogating.
 # The LAST thing every closed call hears, so it is worth getting right.
 # It used to be "సరే సార్, మీ టైమ్ ఇచ్చినందుకు థాంక్యూ. మంచి రోజు సార్."
@@ -382,6 +390,34 @@ SAFE_FALLBACK = (
 # "ధన్యవాదాలు, మంచి రోజు!" as a known past defect, and this line still said it.
 # `సార్` twice, and wrong for half the list.
 SAFE_CLOSE = "సరే అండి, మీ టైమ్ ఇచ్చినందుకు థాంక్యూ అండి."
+
+
+_TIME_WORD = re.compile(
+    r"(రేపు|ఎల్లుండి|ఈ\s*రోజు|ఈరోజు|ఉదయం|మధ్యాహ్నం|సాయంత్రం|రాత్రి"
+    r"|సోమవారం|మంగళవారం|బుధవారం|గురువారం|శుక్రవారం|శనివారం|ఆదివారం"
+    r"|o'?clock|\bam\b|\bpm\b|టైమ్|సమయం)",
+    re.IGNORECASE)
+
+
+def is_time_offer(reply: str, state) -> bool:
+    """Is this the question that offers him a time, after he said yes?
+
+    Once `next_step_agreed` is set, `must_close` forbids every question -- and
+    rightly: asking a caller who has just agreed how big his roof is is the
+    most common compliance failure there is. But with no time chosen yet, the
+    NEXT thing the agent must say is "రేపు ఉదయం లేదా సాయంత్రం, ఏది కుదురుతుంది?",
+    which is a question. Blocking it swaps in SAFE_CLOSE and hangs up on a man
+    who just said yes, with nothing booked.
+
+    So exactly one kind of question survives: one that names a time, on the
+    turn after agreement and before a time is fixed. A qualifying question has
+    no time in it and is still refused.
+    """
+    return bool(getattr(state, "next_step_agreed", False)
+                and not getattr(state, "appointment_iso", "")
+                and not getattr(state, "must_end", False)
+                and not getattr(state, "disqualified", False)
+                and _TIME_WORD.search(reply or ""))
 
 
 def must_close(state) -> bool:

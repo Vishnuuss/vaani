@@ -24,6 +24,7 @@ CANNED = {
     "SAFE_CLOSE": guardrails.SAFE_CLOSE,
     "SAFE_FALLBACK": guardrails.SAFE_FALLBACK,
     "REPAIR_LINE": guardrails.REPAIR_LINE,
+    "OPEN_LINE": guardrails.OPEN_LINE,
 }
 
 

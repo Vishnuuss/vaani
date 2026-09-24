@@ -71,6 +71,12 @@ TURN_MARKERS = "✓○◐"          # complete, incomplete-short, incomplete-lon
 # `MODE: ASK` / `mode:end` / `MODE : CLOSE` -- and any trailing junk on the line.
 MODE_RE = re.compile(r"MODE\s*:\s*(ASK|CLOSE|END)\b[^\n]*\n?", re.IGNORECASE)
 
+# A field id copied out of the state block: `assessment_agreed:` at the start
+# of a sentence. Run 1036 said "assessment_agreed: ఉచితంగా ఒక సైట్ సర్వే..." down
+# the phone. Removed, not truncated at -- the words after it are the reply. It
+# requires an underscore, so no ordinary word in either language can match.
+FIELD_ID_RE = re.compile(r"(?:^|(?<=\n)|(?<=[.!?।]\s)|(?<=[.!?।]))\s*[a-z]+(?:_[a-z]+)+\s*:\s*")
+
 # Once one of these appears the model has stopped replying and begun writing
 # dialogue. WRONG/RIGHT are the few-shot labels from the prompt layers, which the
 # model has been observed to continue.
@@ -247,8 +253,14 @@ class ReplySanitizer:
         self.removed.append(text)
 
     def _strip_modes(self, text: str) -> str:
-        """Remove every MODE line, recording the last mode seen."""
+        """Remove every MODE line, recording the last mode seen, and any field
+        id the model copied out of its state block (see FIELD_ID_RE)."""
         while True:
+            f = FIELD_ID_RE.search(text)
+            if f:
+                self.removed.append(f.group(0))
+                text = text[: f.start()] + text[f.end():]
+                continue
             m = MODE_RE.search(text)
             if not m:
                 return text

@@ -99,7 +99,10 @@ NOT_YET_ANSWERED = re.compile(
     r"|(ముందుకు|నెక్స్ట్).{0,18}(పోతున్|పోయిన|వెళ్ళ|వెళ్త)"
     r"|नहीं\s*बताया|अभी\s*तक\s*नहीं"
     r"|did\s*n[o']?t\s+(tell|say|answer)|haven[o']?t\s+(told|said|answered)"
-    r"|you\s+skipped|why.{0,30}next\s+question)",
+    r"|you\s+skipped|why.{0,30}next\s+question"
+    # Run 1044: "నా పేరు అడిగారు, మళ్లీ స్కిప్ చేశారు" -- you asked my name,
+    # then skipped it. Only the English was matched, so nothing was refunded.
+    r"|స్కిప్\s*చే(శా|సా|స్తు|సి|య)|అడిగి\s*వదిలే)",
     re.IGNORECASE)
 
 
@@ -147,7 +150,13 @@ CANNOT_ANSWER = re.compile(
 # answer, and hanging up on it would lose the call it is trying to save.
 FAREWELL = re.compile(
     r"((^|\s)(బాయ్|బై|టాటా)(\s|$|\.|,)|వీడ్కోలు|శెలవు"
-    r"|(కాల్|ఫోన్)\s*(కట్|పెట్టే)|కట్\s*చేస్(తారా|తా|ేయండి)"
+    # The third branch used to read `చేస్(తారా|తా|ేయండి)` -- "చేస్ేయండి",
+    # which is not a word, so "కట్ చేయండి." never matched and callers in runs
+    # 1020, 1021, 1036 and 1044 had to ask more than once, or hang up
+    # themselves. Spelled out per form, and anchored on చే so that కట్టాలి
+    # (have to pay) cannot reach it.
+    r"|(కాల్|ఫోన్)\s*(కట్|పెట్టే)"
+    r"|కట్\s*చే(స్తారా|స్తా|యండి|య్యండి|యరా|యి|యట్లేదా|సేయండి)"
     r"|अलविदा|फ़ोन\s*रख"
     r"|(^|\s)bye(\s|$|\.|,|-)|good\s*bye|hang\s*up|cut\s+the\s+call)",
     re.IGNORECASE)
@@ -467,6 +476,23 @@ def _refund_ask(state, why: str) -> None:
         logger.info(f"triage: refunding the ask on {field_name!r} -- {why}")
 
 
+AFFIRM = re.compile(
+    r"(అవును|సరే|ఓకే|\bok(ay)?\b|\byes\b|తప్పకుండా"
+    r"|చేయించుకుంటా|చేసుకుంటా|చేయించండి|కావాలి|పెట్టండి|బుక్\s*చేయండి)",
+    re.IGNORECASE)
+
+
+def _is_booking_answer(state, text: str) -> bool:
+    """Did he just say yes to the question that books the next step?"""
+    from api.services.vaani.state import _is_booking_field
+
+    t = (text or "").strip()
+    asked = getattr(state, "last_asked", "") or getattr(state, "pending_ask", "")
+    return bool(_is_booking_field(asked) and AFFIRM.search(t)
+                and not REFUSAL.search(t) and not CANNOT_ANSWER.search(t)
+                and not DEFERRAL.search(t))
+
+
 def apply(state, text: str) -> Triage:
     """Run triage and latch the result into CallState before the reply.
 
@@ -592,6 +618,15 @@ def apply(state, text: str) -> Triage:
         _refund_ask(state, "his sentence was still running")
 
     if result.next_step_agreed:
+        state.next_step_agreed = True
+    # A plain yes to the booking question IS agreement.
+    #
+    # `AGREED` needs a time word, so "ఆ, చేయించుకుంటాను" -- yes, I will get the
+    # survey -- never counted. `closing_is_due()` then stayed False, no goodbye
+    # was ever counted, and the escalation to `must_end` could not fire: run
+    # 1044 spoke its booking line three times and the caller hung up himself.
+    # Only on the booking field, and never over a refusal or a "later".
+    elif _is_booking_answer(state, text):
         state.next_step_agreed = True
     if result.buying_signal:
         state.buying_signal = True

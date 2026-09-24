@@ -202,6 +202,14 @@ def _is_presence_check(text: str) -> bool:
     return not _is_question(rest)
 
 
+# Replies that carry only a polarity -- yes, no, there is, there is not.
+_POLARITY = frozenset({
+    "అవును", "అవునండి", "ఉంది", "ఉందండి", "ఉన్నాయి", "లేదు", "లేదండి",
+    "లేవు", "కాదు", "కాదండి", "సరే", "సరేనండి", "ఓకే", "హా", "హాం",
+    "ok", "okay", "yes", "no",
+})
+
+
 def _asks_to_hear_it_again(text: str) -> bool:
     """Is the caller saying the last question did not reach him?
 
@@ -700,6 +708,8 @@ class CallState:
         """
         charged = self.field_asked_in(said) or self.pending_ask
         if charged:
+            if self.last_asked and charged != self.last_asked:
+                self.previous_asked = self.last_asked
             self.ask_counts[charged] = self.ask_counts.get(charged, 0) + 1
             self.last_asked = charged
             self.pending_ask = ""
@@ -976,6 +986,17 @@ class CallState:
     # next turn, a single subsidy question would license prices for the rest of
     # the call.
     reference_served_this_turn: bool = False
+    # Has the agent already handed an abandoned-checklist caller the floor with
+    # OPEN_LINE? One open invitation, then a stubborn repeat may close the call.
+    open_line_said: bool = False
+    # Each field's extraction TYPE ("boolean", "string", "number"), from the
+    # workflow's own extraction variables. It is the one fact that says a bare
+    # "ఉంది" cannot be a name. Empty for an agent that carries none, in which
+    # case nothing below changes.
+    field_types: dict = field(default_factory=dict)
+    # The question asked BEFORE `last_asked`, so a late answer to it can be
+    # credited to it rather than to whatever was asked next.
+    previous_asked: str = ""
     # The TEXT of the rows served this turn, so the price rule can check that a
     # quoted figure is literally the client's rather than merely made of words
     # the client happened to use. Reset with the flag on every render.
@@ -1081,6 +1102,23 @@ class CallState:
             # He asked US something. The question we asked is still open, and
             # the answer-first rule will bring it back after we have replied.
             return
+        types = getattr(self, "field_types", None) or {}
+        if (types and types.get(field_asked) not in (None, "", "boolean")
+                and all(t in _POLARITY or t in completeness.HESITATIONS or not t
+                        for t in toks)):
+            # A bare yes/no cannot answer a field that is not yes/no.
+            #
+            # Run 1044: the name was asked, the caller said "ఆ, ఉంది." -- a
+            # late answer to the ROOF -- and it was credited to the name, which
+            # then left the checklist and was never asked. Run 1023 is the same
+            # with a place name arriving after the roof question. If the
+            # question before this one was a yes/no still open, the reply is
+            # its answer; otherwise it answers nothing and the question stays.
+            prev = getattr(self, "previous_asked", "")
+            if prev and types.get(prev) == "boolean" and prev not in self.known:
+                field_asked = prev
+            else:
+                return
         if _asks_to_hear_it_again(said):
             # "హలో", "ఏమన్నారు", "అర్థం కాలేదు" -- he is telling us the question
             # did not REACH him, so it cannot have been answered.
@@ -1692,8 +1730,13 @@ class CallState:
                             "and continue.")
 
                 if self.asked:
+                    # It used to end "-- do not repeat it; say you could not
+                    # hear." -- an instruction, on every checklist turn, to tell
+                    # a caller heard perfectly that he had not been heard. That
+                    # is the apology the 24 Sep audit found six times. A true
+                    # repeat is caught by the repeat guard, which knows when.
                     lines.append(f"ALREADY SAID: {self.asked[-1][:60]!r} "
-                                 "-- do not repeat it; say you could not hear.")
+                                 "-- do not repeat it; ask the next thing.")
                 if self.last_user_text:
                     lines.append(
                         f"THEY SAID: {self.last_user_text[:60]!r} "

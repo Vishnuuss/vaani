@@ -524,7 +524,15 @@ class ReplyFilter(FrameProcessor):
         if not self._spoken:
             pending = self._pending_repeat + candidate
             head = _normalise(_strip_ack(pending))
-            if len(head) < _REPEAT_PREFIX and self._looks_like_repeat(head):
+            # Never decide on a sliver. HOLDBACK releases `buffer[:-24]`, so
+            # the first piece of a streamed reply is 1-4 characters -- and
+            # `_looks_like_repeat` refuses anything under 6, and this whole
+            # check never runs again once `_spoken` is non-empty. So a repeated
+            # STATEMENT went through word for word: run 1044's booking line
+            # three times, 1035's goodbye three times. Hold until there is
+            # enough to judge; held text is flushed when the reply ends.
+            if len(head) < _REPEAT_PREFIX and (
+                    len(head) < 6 or self._looks_like_repeat(head)):
                 self._pending_repeat = pending
                 return ""
             self._pending_repeat = ""
@@ -576,16 +584,31 @@ class ReplyFilter(FrameProcessor):
             # False, and the model repeating one question for six straight turns
             # because nothing else was left for it to say. A blocked repeat with
             # nowhere to go says goodbye.
-            if state is not None and (guardrails.must_close(state)
-                                      or not list(getattr(state, "still_need", []) or [])):
-                logger.info("[repeat] repair spent and nothing left to ask; closing")
-                # And actually END it. Returning SAFE_CLOSE without this said
-                # goodbye and left the line open, so the model drafted again and
-                # the caller heard the closing line seven turns running -- run
-                # 803's "the goodbye is an event, not a standing order", reached
-                # from a new direction. `must_end` is what hangs up.
-                state.must_end = True
-                return guardrails.SAFE_CLOSE
+            if state is not None:
+                closing = guardrails.must_close(state) or state.closing_is_due()
+                emptied = not list(getattr(state, "still_need", []) or [])
+                if closing:
+                    # The call has EARNED its end. Say goodbye and actually hang
+                    # up: SAFE_CLOSE without `must_end` left the line open, and
+                    # the closing line was heard seven turns running -- run
+                    # 803's "the goodbye is an event, not a standing order".
+                    logger.info("[repeat] repair spent on a finished call; closing")
+                    state.must_end = True
+                    return guardrails.SAFE_CLOSE
+                if emptied:
+                    # Emptied by ABANDONMENT, not answers -- and that is run
+                    # 817: the caller was engaged and the agent hung up on him.
+                    # The first version of this branch did exactly that, and
+                    # `closing_is_due` exists to say why it is wrong. So hand
+                    # him the floor once; close only if the model is still
+                    # stuck repeating itself after that.
+                    if not getattr(state, "open_line_said", False):
+                        logger.info("[repeat] nothing left to ask; handing him the floor")
+                        state.open_line_said = True
+                        return guardrails.OPEN_LINE
+                    logger.info("[repeat] still repeating after the open line; closing")
+                    state.must_end = True
+                    return guardrails.SAFE_CLOSE
             self._blocked = False
 
         # A field already written down must never be asked again.
@@ -641,6 +664,9 @@ class ReplyFilter(FrameProcessor):
 
         closing = bool(self._injector) and guardrails.must_close(
             self._injector.state)
+        if closing and guardrails.is_time_offer(self._spoken + candidate,
+                                                self._injector.state):
+            closing = False
         # The price rule stands down ONLY on a turn where the model was just
         # handed one of the client's reference answers.
         #
@@ -682,6 +708,11 @@ class ReplyFilter(FrameProcessor):
             # -- two apologies in four turns instead of one.
             if state is not None and not getattr(self, "_repair_suppressed", False):
                 state.repair_said_last_turn = False
+                # A ONE-turn fact, and this is the turn. It was cleared only by
+                # extractor.py -- simulator only -- so after the first "హలో"
+                # every later turn carried "YOU JUST SAID YOU COULD NOT HEAR
+                # THEM": run 1044 from turn 2 onward.
+                state.misheard_last_turn = False
             return candidate
 
         rules = ", ".join(f"{v.rule}({v.evidence})" for v in hits)

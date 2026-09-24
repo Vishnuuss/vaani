@@ -692,25 +692,16 @@ async def test_an_identical_re_ask_is_caught_when_the_reply_arrives_whole():
         f"an identical question was said twice: {heard!r}")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "LIVE DEFECT, measured 24 Sep. The repeat guard only fires when the LLM "
-    "hands the reply over in chunks of 12+ characters, and with a leading "
-    "acknowledgement only when the whole reply arrives in one. Measured on this "
-    "harness, identical re-ask, caught=True only at chunk>=12 with no ack and "
-    "chunk>=200 with one:\n"
-    "  chunk   1/4/6  ack ''  -> NOT caught\n"
-    "  chunk  12      ack ''  -> caught\n"
-    "  chunk  12      ack 'సరే అండి, ' -> NOT caught\n"
-    "  chunk 200      any ack -> caught\n"
-    "Cause: `_gate` can only judge text the sanitizer has RELEASED, and with "
-    "HOLDBACK=24 a token-sized frame releases 1-6 characters. "
-    "`_looks_like_repeat` refuses to suspect a head shorter than 6, so nothing "
-    "is held back, the fragment is spoken, `_spoken` is non-empty and the "
-    "repeat check never runs again for that reply. This is the same "
-    "'structurally unable to fire' failure the fix on 12 Sep was written for, "
-    "reintroduced by chunk size rather than by the constant mismatch."))
 async def test_an_identical_re_ask_is_caught_at_real_streaming_granularity():
-    """A real LLM streams a few characters at a time. Run 1027 and run 721 are
+    """
+    Was a strict xfail until 24 Sep: the guard only fired when the LLM
+    streamed in chunks of 12+ characters, because HOLDBACK releases
+    `buffer[:-24]` as a 1-4 character sliver, `_looks_like_repeat` refused
+    anything under 6, and the check never ran again once anything was
+    spoken. Closed by never deciding on a sliver -- the same change that
+    stopped run 1044 speaking its booking line three times. It went
+    XPASS(strict) the moment that landed.
+A real LLM streams a few characters at a time. Run 1027 and run 721 are
     both a question the caller heard twice, word for word, and the guard that
     exists to stop it cannot see a reply delivered that way."""
     conv = Conversation()

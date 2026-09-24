@@ -250,6 +250,12 @@ def build_vaani_brain(workflow_graph, context, system_prompt: str, *,
     # Parsed here rather than in `render()` because the text is fixed for the
     # whole call and the regexes are not free; `render()` runs on every turn.
     injector.state.reference = client_reference.parse(reference_half)
+    # Field TYPES, so a late "yes" can be told apart from a name.
+    injector.state.field_types = {
+        (v.get("name") if isinstance(v, dict) else getattr(v, "name", "")):
+        (v.get("type") if isinstance(v, dict) else getattr(v, "type", "")) or ""
+        for v in raw_variables
+    }
     return injector, ReplyFilter(injector, filler_state=filler_state,
                                  in_flight=in_flight)
 

@@ -253,11 +253,15 @@ def test_the_state_block_lists_what_was_already_asked():
     assert "నెలవారీ బిల్లు" in block
 
 
-def test_the_state_block_tells_it_to_repair_rather_than_repeat():
+def test_the_state_block_tells_it_not_to_repeat():
+    """It used to add "say you could not hear" -- an instruction, on every
+    checklist turn, to tell a caller heard perfectly that he had not been.
+    That is the apology the 24 Sep audit found six times; it is gone, and
+    test_the_agent_is_not_told_to_fake_mishearing.py pins that it stays gone."""
     st = _state(asked=["సార్, మీ నెలవారీ బిల్లు ఎంత?"])
     block = st.render()
     assert "do not repeat it" in block
-    assert "could not hear" in block
+    assert "could not hear" not in block
 
 
 def test_nothing_about_repeats_appears_before_anything_was_asked():
