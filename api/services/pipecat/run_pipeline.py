@@ -1295,6 +1295,23 @@ async def _run_pipeline_impl(
             logger.error(f"Fillers DISABLED (setup failed): {e!r}")
             filler_player = None
 
+    # TurnSense reads the agent's line as context for the caller's answer. The
+    # reply filter reports every spoken reply; the greeting never passes through
+    # it, so it is handed over here. Inert for every other turn model.
+    if not is_realtime:
+        try:
+            _ts = vaani_turn_taking.analyzer_from(
+                getattr(user_turn_strategies, "stop", None))
+            if hasattr(_ts, "note_agent"):
+                if reply_filter is not None:
+                    reply_filter.agent_line_listener = _ts.note_agent
+                _start = workflow_graph.nodes[workflow_graph.start_node_id]
+                _greet = getattr(_start, "greeting", None) or ""
+                if isinstance(_greet, str) and _greet.strip():
+                    _ts.note_agent(_greet)
+        except Exception as e:
+            logger.debug(f"[turnsense] context wiring skipped: {e!r}")
+
     # Respond off the newest partial when the turn ends before the STT's final
     # arrives. Measured on run 3: endpoint+STT was 1.33s of a 1.91s turn, and
     # nothing on the live path had ever consumed an interim transcript.

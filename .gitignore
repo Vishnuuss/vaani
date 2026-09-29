@@ -31,3 +31,6 @@ docs/superpowers/
 # Vaani scratch output — a compiled prompt dump, not source
 .vaani_compiled_prompt.md
 dograh_pcm_cache/
+
+# TurnSense cross-validation candidates (bswealthfinance/tools/turnsense/cv_replay.py)
+api/services/vaani/models/cand/

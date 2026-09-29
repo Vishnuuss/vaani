@@ -315,6 +315,10 @@ class ReplyFilter(FrameProcessor):
     # way once and every turn after the first died with an AttributeError
     # (run 213). Empty is also correct on its own terms -- nothing held back.
     _pending_repeat = ""
+    # Told the full spoken text of every reply when it ends. The TurnSense
+    # analyzer reads it as context: "విష్ణు" after "మీ పేరు?" is a finished
+    # turn, "మాది" after "ఏ సిటీ?" is not. Class-level for the __new__ suites.
+    agent_line_listener = None
 
     def __init__(self, injector: "StateInjector | None" = None,
                  filler_state=None, in_flight=None):
@@ -1037,6 +1041,11 @@ class ReplyFilter(FrameProcessor):
             if tail:
                 self._spoken += tail
                 await self.push_frame(LLMTextFrame(tail), direction)
+            if self.agent_line_listener is not None and self._spoken.strip():
+                try:
+                    self.agent_line_listener(self._spoken)
+                except Exception as e:  # never let context-passing cost a reply
+                    logger.debug(f"[turnsense] agent line not passed: {e!r}")
             if self._sanitizer.removed:
                 logger.warning(
                     "[reply] removed from the spoken reply: "

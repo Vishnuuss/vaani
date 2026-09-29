@@ -293,6 +293,11 @@ _ANALYZER_ONLY_KEYS = (
     "endpoint_unsure_floor_secs",
     "endpoint_unsure_band",
     "smart_turn_stop_secs",
+    "turnsense_fast_p",
+    "turnsense_slow_p",
+    "turnsense_mid_wait_secs",
+    "turnsense_max_wait_secs",
+    "turnsense_no_text_wait_secs",
 )
 
 
@@ -338,6 +343,42 @@ def _build_user_turn_stop_strategies(run_configs: dict):
     # and 163. See test_turn_stop_default_is_applied.py.
     strategy = run_configs.get("turn_stop_strategy", DEFAULT_TURN_STOP_STRATEGY)
     _warn_about_analyzer_only_keys(run_configs, strategy)
+
+    if strategy == "turn_analyzer" and run_configs.get("turn_model") == "turnsense":
+        # TurnSense-te: the turn ends when the WORDS say he has finished, not
+        # when a stopwatch runs out. Replayed on 145 real calls it is measured
+        # against the live timer + assist in docs/voice-platform/42-*.
+        #
+        # Deliberately NOT combined with semantic_turn_completion (deadlocks on
+        # gpt-oss-120b, doc 40) and NOT raced against the timer: a race lets the
+        # eager side win and can only add cut-offs (the assist measured +2 pp).
+        # Its own no-text branch IS the 0.7 s timer, so a pause it cannot read
+        # ends exactly when it does today.
+        from api.services.vaani.turnsense_turn import (
+            TurnSenseAnalyzer,
+            TurnSenseParams,
+        )
+        analyzer = TurnSenseAnalyzer(params=TurnSenseParams(
+            fast_p=float(run_configs.get("turnsense_fast_p", 0.85)),
+            slow_p=float(run_configs.get("turnsense_slow_p", 0.60)),
+            mid_wait_secs=float(run_configs.get("turnsense_mid_wait_secs", 0.9)),
+            max_wait_secs=float(run_configs.get("turnsense_max_wait_secs", 1.6)),
+            no_text_wait_secs=float(run_configs.get(
+                "turnsense_no_text_wait_secs",
+                run_configs.get("dograh_speech_timeout_secs",
+                                DEFAULT_DOGRAH_SPEECH_TIMEOUT_SECS))),
+        ))
+        if not analyzer.enabled:
+            logger.warning("[turn] turnsense requested but its model is missing; "
+                           "running Dograh's timer instead")
+            return [SpeechTimeoutUserTurnStopStrategy(
+                user_speech_timeout=float(run_configs.get(
+                    "dograh_speech_timeout_secs",
+                    DEFAULT_DOGRAH_SPEECH_TIMEOUT_SECS)),
+                wait_for_transcript=False)]
+        logger.info(f"[turn] TurnSense ENABLED ({analyzer._model.version})")
+        return [TextAwareTurnStopStrategy(turn_analyzer=analyzer,
+                                          wait_for_transcript=False)]
 
     if strategy == "turn_analyzer":
         stop_secs = run_configs.get(

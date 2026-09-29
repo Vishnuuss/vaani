@@ -576,8 +576,19 @@ class WorkflowConfigurationDefaults(BaseModel):
         default=DEFAULT_TURN_RESUME_WINDOW_SECS, ge=0.0, le=5.0)
     turn_cutoffs_before_adapting: int = Field(
         default=DEFAULT_TURN_CUTOFFS_BEFORE_ADAPTING, ge=1, le=20)
-    turn_model: Literal["forest", "linear", "timer", "audio-native"] = (
+    # "turnsense": the Telugu end-of-turn model that reads the words Soniox
+    # hands over at each pause (turnsense.py / turnsense_turn.py). Only live on
+    # turn_stop_strategy="turn_analyzer"; tuned by the turnsense_* keys below.
+    turn_model: Literal["forest", "linear", "timer", "audio-native", "turnsense"] = (
         DEFAULT_TURN_MODEL)
+    # Defaults = the operating point measured on 145 real calls, 5-fold
+    # out-of-sample (doc 42): 5.7% cut off at 0.46 s median wait, against the
+    # live timer + assist at 9.7% / 0.88 s.
+    turnsense_fast_p: float = Field(default=0.85, ge=0.0, le=1.0)
+    turnsense_slow_p: float = Field(default=0.60, ge=0.0, le=1.0)
+    turnsense_mid_wait_secs: float = Field(default=0.9, ge=0.0, le=3.0)
+    turnsense_max_wait_secs: float = Field(default=1.6, ge=0.0, le=3.0)
+    turnsense_no_text_wait_secs: float = Field(default=0.7, ge=0.0, le=3.0)
     turn_start_strategy: Literal["default", "min_words", "provisional_vad"] = (
         DEFAULT_TURN_START_STRATEGY
     )
