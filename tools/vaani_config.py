@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -54,8 +55,16 @@ def api(method: str, path: str, body=None):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(f"{BASE}{path}", data=data,
                                  headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=120) as r:
-        raw = r.read().decode("utf-8", "replace")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            raw = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        # The server says exactly what it objected to and a bare traceback
+        # throws that away. A 422 from this endpoint is almost always a
+        # sentence naming the field, and reading it is the difference between
+        # a fix and an afternoon of guessing.
+        detail = e.read().decode("utf-8", "replace")
+        raise SystemExit(f"HTTP {e.code} from {method} {path}\n{detail[:600]}")
     return json.loads(raw) if raw.strip() else {}
 
 
@@ -65,7 +74,14 @@ def coerce(text: str):
     Types matter here: the pipeline reads these with
     `bool(run_configs.get(...))`, and the STRING "false" is true.
     """
-    low = text.strip().lower()
+    stripped = text.strip()
+    if stripped[:1] in ("{", "["):
+        # `model_overrides` is a nested object, not a scalar. Added 18 Sep to
+        # put Soniox on ONE workflow via model_overrides.stt while the other
+        # five stay on the organisation's Sarvam config -- resolve.py
+        # deep-merges this section and handles a provider change explicitly.
+        return json.loads(stripped)
+    low = stripped.lower()
     if low in ("true", "false"):
         return low == "true"
     if low in ("null", "none"):

@@ -119,6 +119,13 @@ def show_run(wf, rid, transcript=False):
     print(f"\n=== run {rid}  {det.get('name')} ===")
     print(f"  disposition : {det.get('call_disposition')}   duration={det.get('duration')}s")
     print(f"  mode        : {det.get('mode')}")
+    # Which commit produced this transcript. Stamped by the server into
+    # gathered_context; "-" means the call predates the stamp. On 11 Sep ten
+    # commits shipped in a day and every "did that fix work?" had to be guessed
+    # from timestamps, twice wrongly.
+    build = ((det.get("gathered_context") or {}).get("build")
+             or (det.get("transcript_variables") or {}).get("build") or "-")
+    print(f"  build       : {build}")
     if cost:
         print(f"  cost        : {json.dumps(cost)[:400]}")
     if rows:

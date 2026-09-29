@@ -67,6 +67,15 @@ def fingerprint(value) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--section", choices=("stt", "llm", "tts"), default="stt")
+    # Added 19 Sep to put the ear back on Sarvam. Soniox went in at the ORG
+    # level on 18 Sep and measured slower live than the Sarvam it replaced
+    # -- endpoint 1.418s against 0.906s -- and there was no way to move the
+    # provider back without hand-rolling the PUT, which this file exists to
+    # stop anyone doing. Changing provider almost always means changing the
+    # key in the same write: authenticating Sarvam with a Soniox key fails
+    # as SILENCE, indistinguishable from the turn-detection bugs this
+    # project spends its life chasing.
+    ap.add_argument("--provider")
     ap.add_argument("--api-key")
     ap.add_argument("--model")
     ap.add_argument("--language")
@@ -100,6 +109,8 @@ def main() -> int:
         print(f"{'voice':<12}{stt.get('voice')}")
 
     changes = {}
+    if a.provider and a.provider != stt.get("provider"):
+        changes["provider"] = a.provider
     if a.api_key and fingerprint(a.api_key) != fingerprint(stt.get("api_key")):
         changes["api_key"] = a.api_key
     if a.model and a.model != stt.get("model"):
@@ -136,7 +147,7 @@ def main() -> int:
     if bad:
         print(f"\nWROTE BUT DID NOT STICK: {bad}")
         return 1
-    print(f"\napplied. now: model={live.get('model')} "
+    print(f"\napplied. now: provider={live.get('provider')} model={live.get('model')} "
           f"language={live.get('language')} api_key={fingerprint(live.get('api_key'))}")
     return 0
 

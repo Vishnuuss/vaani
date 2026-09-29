@@ -20,7 +20,31 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-TELEPHONY_CONFIG_ID = 1  # "BSWEALTH"
+# Which telephony configuration the campaign dials through. This was hardcoded
+# to 1 ("BSWEALTH"), which is the id on the OLD production Dograh at
+# voice.bswealthfinance.com. On vaani there is no id 1 at all, and
+# campaign/create answers `telephony_configuration_not_found` -- after the CSV
+# has already been uploaded, so it looks like the upload failed.
+#
+# Resolved from the server instead: GET /api/v1/organizations/telephony-configs
+# (plural -- the router prefix is "/organizations") and take the one flagged
+# `is_default_outbound`. On vaani, 13 Sep 2026, that is id 5, "vaani"/vobiz.
+# --telephony-config overrides it.
+TELEPHONY_CONFIG_ID = None
+
+
+def resolve_telephony_config() -> int:
+    """The org's default outbound configuration, read off the server."""
+    data = req("GET", "/api/v1/organizations/telephony-configs")
+    configs = data.get("configurations", []) if isinstance(data, dict) else []
+    if not configs:
+        sys.exit("no telephony configurations on this server")
+    for c in configs:
+        if c.get("is_default_outbound") and c.get("is_ready_for_outbound"):
+            print(f"telephony config: {c['id']} ({c.get('name')}/{c.get('provider')})")
+            return c["id"]
+    sys.exit(f"no default outbound config ready; have: "
+             f"{[(c.get('id'), c.get('name')) for c in configs]}")
 
 
 def _env() -> tuple[str, str]:
@@ -64,7 +88,9 @@ def req(method: str, path: str, body=None, raw_url: str | None = None, data: byt
         return text
 
 
-def place(workflow: int, phone: str, name: str, vertical: str) -> int:
+def place(workflow: int, phone: str, name: str, vertical: str,
+          telephony_config: int | None = None) -> int:
+    telephony_config = telephony_config or resolve_telephony_config()
     lead_id = str(uuid.uuid4())
     csv = ("phone_number,customer_name,city,property_type,budget,lead_id,email,vertical\n"
            f"{phone},{name},,,,{lead_id},,{vertical}\n").encode()
@@ -87,7 +113,7 @@ def place(workflow: int, phone: str, name: str, vertical: str) -> int:
         "workflow_id": workflow,
         "source_type": "csv",
         "source_id": key,
-        "telephony_configuration_id": TELEPHONY_CONFIG_ID,
+        "telephony_configuration_id": telephony_config,
         "max_concurrency": 1,
         "retry_config": {"enabled": False, "max_retries": 0, "retry_delay_seconds": 120,
                          "retry_on_busy": False, "retry_on_no_answer": False,
@@ -173,6 +199,8 @@ def main() -> int:
     ap.add_argument("--phone")
     ap.add_argument("--name", default="test")
     ap.add_argument("--vertical", default="loan")
+    ap.add_argument("--telephony-config", type=int,
+                    help="override the resolved default outbound config id")
     ap.add_argument("--report", type=int, help="campaign id to fetch results for")
     a = ap.parse_args()
 
@@ -181,7 +209,7 @@ def main() -> int:
         return 0
     if not (a.workflow and a.phone):
         sys.exit("--workflow and --phone required (or use --report <campaign_id>)")
-    place(a.workflow, a.phone, a.name, a.vertical)
+    place(a.workflow, a.phone, a.name, a.vertical, a.telephony_config)
     return 0
 
 

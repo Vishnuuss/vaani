@@ -196,10 +196,36 @@ def grade(workflow: int, rid: int) -> int:
     if gaps:
         worst = max(gaps)
         bad = [g for g in gaps if g >= 3.0]
-        note = "   <-- he is sitting there saying hello" if bad else "   ok"
+        note = "   (includes the agent's own speaking time)"
         print("")
         print("    SILENCE          worst %.1fs   %d gap(s) over 3s%s"
               % (worst, len(bad), note))
+
+    # --- the wait that actually means he was ignored ---
+    #
+    # The gap above is event-to-event, so it counts the agent TALKING as though
+    # it were silence. Run 898 scored "26 gaps over 3s, worst 13.9s" for a call
+    # whose longest gaps were the agent explaining solar in Telugu for thirteen
+    # seconds, exactly as the caller had asked. That reading nearly sent a fix
+    # after a problem that was not there.
+    #
+    # A caller-to-agent gap is the honest one: he has stopped, nothing is
+    # playing, and he is waiting on us.
+    waits2, last_user2 = [], None
+    for e in ev:
+        if e.get("type") == "rtf-user-transcription":
+            last_user2 = _t(e.get("timestamp"))
+        elif e.get("type") == "rtf-bot-text" and last_user2 is not None:
+            t2 = _t(e.get("timestamp"))
+            if t2 is not None:
+                waits2.append((t2 - last_user2).total_seconds())
+            last_user2 = None
+    if waits2:
+        bad2 = [w for w in waits2 if w >= 3.0]
+        print("")
+        print("    HIS WAIT         worst %.1fs   %d over 3s%s"
+              % (max(waits2), len(bad2),
+                 "   <-- he is waiting on us" if bad2 else "   ok"))
 
     # --- what was captured ---
     fields = {k: v for k, v in (gc.get("extracted_variables") or {}).items()}
