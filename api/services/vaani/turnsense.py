@@ -133,6 +133,13 @@ def dense_features(agent: str, turn: str, last: str,
     f["agent_none"] = 1.0 if not a else 0.0
     for k, keys in _ASK.items():
         f[k] = 1.0 if any(x in a for x in keys) else 0.0
+    # The answer the agent asked for is IN the words. A name is the clearest
+    # case, and the character model alone misreads it: "నా పేరు రవి." ends on
+    # the vowel sign that also ends a non-finite verb ("చేసి"), and scored 0.85
+    # against 0.91 for "సురేష్" -- a coin-flip on how the name happens to end.
+    f["name_given"] = 1.0 if (f["ask_name"] and ("పేరు" in turn or "name" in turn.lower())
+                              and lw not in HESITATIONS and lw not in CONNECTIVES
+                              and _end_punct(last) in ("stop", "none")) else 0.0
     f["caller_hold_rate"] = float(caller_hold_rate)
     f["caller_pauses"] = math.log1p(max(0, caller_pauses))
     return f

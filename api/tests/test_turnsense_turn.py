@@ -57,11 +57,11 @@ def test_no_text_is_todays_timer():
 
 
 def test_finished_words_end_the_turn_at_the_text():
-    a = make({"నా పేరు కైలాష్.": 0.97})
+    a = make({"నా పేరు సురేష్.": 0.97})
     speak(a, 1.0)
     for _ in range(12):                                  # 0.24 s: STT at work
         assert a.append_audio(FRAME, False) == EndOfTurnState.INCOMPLETE
-    a.note_text("నా పేరు కైలాష్.")
+    a.note_text("నా పేరు సురేష్.")
     assert a.append_audio(FRAME, False) == EndOfTurnState.COMPLETE
 
 
@@ -157,7 +157,7 @@ async def test_analyze_end_of_turn_never_claims_complete_at_the_vad_stop():
 
 
 def test_features_are_stable_and_read_the_tail():
-    f = dense_features("మీ పేరు ఏంటి?", "నా పేరు కైలాష్.", "నా పేరు కైలాష్.", 1.2, 1)
+    f = dense_features("మీ పేరు ఏంటి?", "నా పేరు సురేష్.", "నా పేరు సురేష్.", 1.2, 1)
     assert f["ask_name"] == 1.0 and f["punct_stop"] == 1.0
     g = dense_features("", "అరవై", "అరవై", 0.4, 1)
     assert g["unfinished_rule"] == 1.0
@@ -187,13 +187,16 @@ def test_the_shipped_model_reads_telugu():
     """The artifact that ships, on the cases this project was built around."""
     m = TurnSenseModel.load()
     assert m is not None, "models/turnsense_te.json must ship with the code"
-    name = m.probability("మీ పేరు చెప్పగలరా?", "నా పేరు కైలాష్.", "నా పేరు కైలాష్.")
+    name = m.probability("మీ పేరు చెప్పగలరా?", "నా పేరు సురేష్.", "నా పేరు సురేష్.")
+    # a name ending on the vowel sign that also ends a non-finite verb ("చేసి")
+    # scored 0.85 before `name_given`; it must clear the fast bar on its own
+    vowel_end = m.probability("మీ పేరు చెప్పగలరా?", "నా పేరు రవి.", "నా పేరు రవి.")
     bill = m.probability("మీ కరెంట్ బిల్లు నెలకి ఎంత వస్తుంది?",
                          "2 లక్షలు వస్తున్నాయి.", "2 లక్షలు వస్తున్నాయి.")
     dangling = m.probability("మీ కరెంట్ బిల్లు నెలకి ఎంత వస్తుంది?", "మాది.", "మాది.")
     cut = m.probability("", "హలో. నేను—", "హలో. నేను—")
     # a finished answer takes the fast path; the run-1021 "మాది." does not
-    assert name >= 0.85 and bill >= 0.85
+    assert name >= 0.85 and bill >= 0.85 and vowel_end >= 0.85
     assert dangling < 0.6 and cut < 0.6
 
 
