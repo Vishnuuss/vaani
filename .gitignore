@@ -36,6 +36,10 @@
 # --- re-include: deterministic tooling -------------------------------------
 !/tools/
 !/tools/*.py
+# tools/turnsense: the end-of-turn replay, training and verification tooling
+# (doc 42). Python only -- its data lives in .tmp/, which stays ignored.
+!/tools/turnsense/
+!/tools/turnsense/*.py
 
 # ---------------------------------------------------------------------------
 # Hard denials. These win regardless of any re-inclusion above, and exist so a

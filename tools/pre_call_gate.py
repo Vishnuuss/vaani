@@ -71,6 +71,14 @@ TEST_FILES = [
     "api/tests/test_the_answer_bank_numbers_are_legal.py",
     "api/tests/test_the_blind_floor_is_the_real_lever.py",
     "api/tests/test_dead_turn_config_is_loud.py",
+    # Added 24 Sep from the audit of runs 1013-1044.
+    "api/tests/test_the_call_ends_when_it_should.py",        # 8/17 calls never ended
+    "api/tests/test_a_late_answer_goes_to_its_question.py",   # 1044 skipped the name
+    "api/tests/test_a_field_id_is_never_spoken.py",           # 1036 read a field id aloud
+    "api/tests/test_the_agent_is_not_told_to_fake_mishearing.py",
+    # Added 29 Sep: the TurnSense analyzer's mechanics (fast on finished words,
+    # patient on unfinished, never worse than the 0.7 s timer without text).
+    "api/tests/test_turnsense_turn.py",
 ]
 
 _results: list[tuple[bool, str, str]] = []
