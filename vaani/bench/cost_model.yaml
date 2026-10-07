@@ -1,0 +1,67 @@
+# Per-minute cost model.
+#
+# RULE: every `rate` below starts as null. Fill each one from the vendor's live
+# rate card, and record the date you read it. Do NOT paste numbers from a
+# marketing page or from memory -- we have been burned by vendor-claimed figures
+# before. After 100 real calls, reconcile this model against the actual invoices;
+# if it is off by more than 20%, fix the model before scaling.
+
+currency: INR
+verified_on: null          # YYYY-MM-DD you last checked the rate cards
+
+assumptions:
+  call_duration_min: 4.0
+  agent_talk_ratio: 0.45         # share of call the agent is speaking
+  turns_per_call: 18
+  system_prompt_tokens: 3000     # compiled 4-layer prompt, cached prefix
+  output_tokens_per_turn: 60
+
+vendors:
+  groq:
+    model: openai/gpt-oss-120b
+    rate_input_per_mtok: null
+    rate_output_per_mtok: null
+    rate_cached_input_per_mtok: null   # prompt caching makes speculation cheap
+    notes: >
+      Input-dominated. Layers 1+2 of the prompt are byte-identical across every
+      call, so they should hit the cache. Confirm Groq's cache discount and TTL
+      before assuming it.
+
+  cartesia:
+    model: sonic-2
+    rate_per_1k_chars: null
+    notes: >
+      Largest variable cost. Reduced directly by the pre-synthesised audio bank
+      (greeting, fillers, disclosures) -- those characters are paid once, ever.
+
+  sarvam:
+    model: saaras:v3-realtime
+    rate_per_audio_min: null
+    notes: >
+      Billed on audio duration. Gating STT during agent playback removes roughly
+      `agent_talk_ratio` of the billable minutes.
+
+  vobiz:
+    rate_per_min_outbound: null
+    rate_per_min_inbound: null
+
+  compute:
+    instance: null               # e.g. ap-south-1 c7g.xlarge
+    rate_per_hour: null
+    concurrent_calls_per_box: null
+
+# Savings levers from the plan, to be measured not assumed.
+levers:
+  presynthesised_audio:
+    expected_tts_char_reduction: 0.15..0.25
+    measured: null
+  prompt_caching:
+    expected_cached_input_share: 0.80
+    measured: null
+  stt_gating_during_playback:
+    expected_stt_min_reduction: null   # ~= agent_talk_ratio
+    measured: null
+  speculation_overhead:
+    # Cost we ADD, not save. Cancelled speculations pay prefill.
+    expected_extra_input_tokens_per_turn: null
+    measured: null
