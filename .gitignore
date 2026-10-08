@@ -48,6 +48,8 @@
 !/nginx.conf
 !/tests/
 !/tests/*.py
+!/AI-Voice-Agent-Dashboard/
+!/AI-Voice-Agent-Dashboard/**
 !/.github/
 !/.github/workflows/
 !/.github/workflows/*.yml

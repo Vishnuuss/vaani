@@ -27,7 +27,25 @@ services:
       retries: 3
       start_period: 10s
 
-  # Nginx reverse proxy — terminates TLS, proxies HTTP+WS to gateway
+  # AI Voice Agent & Vapi/Dograh Calling Dashboard
+  dashboard:
+    build:
+      context: ./AI-Voice-Agent-Dashboard
+      dockerfile: Dockerfile
+    container_name: vaani-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.production
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  # Nginx reverse proxy — routes /ws, /answer, /api to gateway and / to dashboard
   nginx:
     image: nginx:alpine
     container_name: vaani-nginx
@@ -41,6 +59,9 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+      dashboard:
+        condition: service_started
 
 volumes:
   call-logs:
+

@@ -1,0 +1,4 @@
+0000000000000000000000000000000000000000 ae33669c43f7573858bcb653e0aca7e1afecd7fa Vishnuuss <sreekanteswarappa@gmail.com> 1786013845 +0530	branch: Created from HEAD
+ae33669c43f7573858bcb653e0aca7e1afecd7fa 1292fc5f25521060858e59f71e8ef0e13d1280b1 Vishnuuss <sreekanteswarappa@gmail.com> 1786013845 +0530	commit: @
+1292fc5f25521060858e59f71e8ef0e13d1280b1 0b0d837ec4d46a7596375db0b7fe04e4dc322c02 Vishnuuss <sreekanteswarappa@gmail.com> 1786013862 +0530	commit (amend): Classify call outcomes by what they contain, and make follow-ups reachable
+0b0d837ec4d46a7596375db0b7fe04e4dc322c02 bbca3803e07806743cc853191af1fea059023890 Vishnuuss <sreekanteswarappa@gmail.com> 1786013880 +0530	commit: Charge for a call when it ends, and put GST on top of a top-up

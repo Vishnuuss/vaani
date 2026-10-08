@@ -77,11 +77,13 @@ sudo docker compose up -d $BUILD_FLAG
 
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "  ✅ Vaani deployed!"
+echo "  ✅ Vaani & Voice Agent Dashboard deployed!"
 echo ""
-echo "  Health check:  http://$(curl -s ifconfig.me):8090/health"
-echo "  Answer URL:    http://$(curl -s ifconfig.me):80/answer"
-echo "  WebSocket:     ws://$(curl -s ifconfig.me):80/ws"
+echo "  Dashboard UI:  http://$(curl -s ifconfig.me)"
+echo "  Health check:  http://$(curl -s ifconfig.me)/health"
+echo "  Answer URL:    http://$(curl -s ifconfig.me)/answer"
+echo "  WebSocket:     ws://$(curl -s ifconfig.me)/ws"
 echo ""
-echo "  Logs:          sudo docker compose logs -f gateway"
+echo "  Logs:          sudo docker compose logs -f"
 echo "═══════════════════════════════════════════════════════"
+

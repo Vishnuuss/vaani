@@ -1,0 +1,29 @@
+Scope the repair pass to one backend, and stop counting 404s as errors
+
+Caught by running the sweep and reading its report instead of the headline: it
+said "repaired 2" and also "errors 6", and the six were not noise.
+
+Of seven candidates, six were the OLD backend's rows (runs 2091-2097). This pass
+repairs a row from whatever run comes back for its id - and a run id identifies
+a call only within one backend. Today those ids merely 404 on Vaani, because
+Vaani is at ~800. That is a clock, not a fix: when Vaani reaches 2091 they stop
+404-ing and start returning a DIFFERENT customer's call, which this pass would
+then merge into an August row.
+
+Exactly the collision scripts/009 exists for, reintroduced in the repair path I
+had just written. It has to be handled everywhere a run id is treated as an
+identity, not only at insert. The candidate query is now scoped by provider, so
+the wrong-backend question is never asked.
+
+A 404 is also reclassified as skipped rather than error: it means "no such run
+on this backend", a normal outcome. Left as an error it reported six permanent
+failures every tick and would have hidden a real one.
+
+Verified end to end on run 798 - the 70-second solar call that had been stored
+as duration 0 with a score of 0. After the sweep: duration 70, recording and
+transcript present, gathered_context carrying house_ownership "own" and
+solar_planning true, and the lead reading score 100, qualification "qualified".
+
+75 tests passing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
